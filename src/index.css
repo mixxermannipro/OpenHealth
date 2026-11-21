@@ -1,0 +1,128 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    /* Apple System Grouped Light */
+    --bg-canvas: #F2F2F7;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #ECECF2;
+    --bg-well: rgba(118, 118, 128, 0.11);
+    --bg-glass: rgba(255, 255, 255, 0.78);
+    --border-hairline: rgba(60, 60, 67, 0.10);
+    --border-glass: rgba(60, 60, 67, 0.12);
+    --text-primary: #141518;
+    --text-secondary: #5E6068;
+    --text-muted: #8E8E93;
+    --accent-recovery: #16A34A;
+    --accent-sleep: #7C3AED;
+    --accent-hrv: #0284C7;
+    --accent-strain: #E05246;
+    --accent-calories: #D97706;
+    --accent-load: #D97706;
+    --surface-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px rgba(0, 0, 0, 0.04);
+    --glass-shadow: 0 10px 32px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  }
+
+  .dark {
+    /* Obsidian Apple / Whoop Liquid Glass Dark */
+    --bg-canvas: #090A0C;
+    --bg-surface: #141518;
+    --bg-elevated: #1D1F24;
+    --bg-well: rgba(255, 255, 255, 0.075);
+    --bg-glass: rgba(22, 23, 27, 0.76);
+    --border-hairline: rgba(255, 255, 255, 0.075);
+    --border-glass: rgba(255, 255, 255, 0.13);
+    --text-primary: #F5F6F8;
+    --text-secondary: #A1A4AE;
+    --text-muted: #717580;
+    --accent-recovery: #5CE17C;
+    --accent-sleep: #A78BFA;
+    --accent-hrv: #60A5FA;
+    --accent-strain: #FB7B6B;
+    --accent-calories: #F5B82E;
+    --accent-load: #F5B82E;
+    --surface-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --glass-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+
+  html {
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    overflow-x: hidden;
+    transition: background-color 220ms ease, color 220ms ease;
+  }
+
+  .dark body {
+    letter-spacing: 0.004em;
+  }
+
+  /* Editorial Serif for Hero Numerals & Key Display Titles */
+  .font-editorial,
+  .serif-metric {
+    font-family: "Literata", Georgia, Cambria, "Times New Roman", serif;
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.025em;
+  }
+
+  .font-mono,
+  .tabular-nums {
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .apple-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-hairline);
+    border-radius: 22px;
+    box-shadow: var(--surface-shadow);
+  }
+
+  .liquid-glass {
+    background-color: var(--bg-glass);
+    backdrop-filter: blur(28px) saturate(175%);
+    -webkit-backdrop-filter: blur(28px) saturate(175%);
+    border: 1px solid var(--border-glass);
+    box-shadow: var(--glass-shadow);
+  }
+
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .mb-safe {
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* Subtle custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(142, 142, 147, 0.25);
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "KADENZ — Gesundheits- & Trainingsintelligenz",
+  "description": "Universelle, geräteunabhängige Plattform für Erholung, Schlaf, Trainingsbelastung und langfristige Gesundheitstrends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
