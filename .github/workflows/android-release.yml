@@ -8,9 +8,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   verify-and-build:
-    name: Test, Build & Assemble Android APK
+    name: Test, Build & Release Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,8 +29,17 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK (API 36)
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=${SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${SDK_ROOT}" >> "$GITHUB_ENV"
+          SDKMANAGER="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -42,24 +54,92 @@ jobs:
           bun run build
           npx cap sync android
 
-      - name: Assemble Android APK
+      - name: Assemble & Verify Signed Release APK
         env:
-          KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x android/gradlew
-          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > /tmp/kadenz-release.jks
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > /tmp/kadenz-release.jks
             export KEYSTORE_PATH=/tmp/kadenz-release.jks
-            ./android/gradlew -p android assembleRelease
           else
-            ./android/gradlew -p android assembleDebug
+            keytool -genkeypair -v \
+              -keystore /tmp/kadenz-release.jks \
+              -storetype PKCS12 \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -alias kadenz-release \
+              -storepass "KadenzReleaseBuild2026!" \
+              -keypass "KadenzReleaseBuild2026!" \
+              -dname "CN=KADENZ OpenHealth, OU=OpenHealth, O=mixxermannipro, L=Berlin, C=DE"
+            export KEYSTORE_PATH=/tmp/kadenz-release.jks
+            export KEYSTORE_PASSWORD="KadenzReleaseBuild2026!"
+            export KEY_ALIAS="kadenz-release"
+            export KEY_PASSWORD="KadenzReleaseBuild2026!"
           fi
+
+          ./android/gradlew -p android assembleRelease
+
+          TAG="${GITHUB_REF_NAME:-dev}"
+          mkdir -p release-out
+          APK_NAME="KADENZ-OpenHealth-${TAG}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "release-out/${APK_NAME}"
+          (cd release-out && sha256sum "${APK_NAME}" > "${APK_NAME}.sha256")
+          "${ANDROID_HOME}/build-tools/35.0.0/apksigner" verify --verbose "release-out/${APK_NAME}"
+
+          echo "APK_NAME=${APK_NAME}" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$(awk '{print $1}' "release-out/${APK_NAME}.sha256")" >> "$GITHUB_ENV"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: kadenz-openhealth-apk
-          path: android/app/build/outputs/apk/**/*.apk
+          path: release-out/*
+
+      - name: Publish GitHub Release (on Tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cat <<EOF > release-notes.md
+          # KADENZ · OpenHealth ${TAG} (Android Release)
+
+          Offizielles Android-Release von **KADENZ (OpenHealth)** – 100 % Local-First, Open Source unter **GNU AGPL-3.0**, ohne Cloud, ohne Konto und ohne Abo.
+
+          ## ⬇️ Download & Installation auf Android
+          1. Lade unten unter **Assets** die Datei **\`${APK_NAME}\`** direkt auf dein Android-Smartphone herunter (Android 8.0 / API 26 oder neuer).
+          2. Tippe auf die heruntergeladene APK-Datei und erlaube bei Bedarf einmalig die Installation aus dieser Quelle.
+          3. Verbinde nach dem Start unter **Mehr → Datenquellen & Uhren** **Android Health Connect**, um echte Daten deiner Smartwatch (Garmin, COROS, Polar, Samsung Health, Fitbit, Oura, Withings, Suunto u. a.) lokal abzugleichen.
+
+          ## 🤖 Native Android-Systemintegrationen
+          - **Android Health Connect (Jetpack \`connect-client:1.1.0\`)**: Echter lokaler Lese-Abgleich für Schritte, aktive & gesamte Kalorien, Schlaf inkl. Schlafphasen (Wach, Leicht, Tief, REM), HRV (RMSSD), Ruhepuls, Trainings inkl. Herzfrequenz & Distanz, Gewicht, Körperfett, VO₂max, SpO₂, Atemfrequenz und Wasser + optionaler Schreib-Abgleich für Mahlzeiten, Wasser und Gewicht sowie verpflichtende lokale Datenschutz-Erklärung (\`PermissionsRationaleActivity\`).
+          - **Android Share-Target (\`ACTION_SEND\`) & Deep-Links (\`caltrack://\`, \`kadenz://\`)**: Teile Mahlzeiten-Analysen direkt aus Gemini, ChatGPT oder Claude über das Android-Teilen-Menü an KADENZ (Kaltstart & laufende App).
+          - **Universeller Offline-Barcode-Scanner**: Native Android-Kameraberechtigung + \`BarcodeDetector\` mit **\`@zxing/browser\` Offline-Fallback** für EAN-8, EAN-13, UPC-A, UPC-E & Code-128 auf jedem Android-Handy (auch ohne Google Play Services).
+          - **Launcher App-Shortcuts**: Langer Druck auf das App-Icon für Direktzugriff auf *Mahlzeit erfassen* und *Schlaf ansehen*.
+          - **Native System-Integrationen**: Android \`ClipboardManager\`, native Haptik (\`VibratorManager\` / \`VibrationEffect\`), nativer JSON-Backup-Export über \`FileProvider\` & Android-Teilen-Sheet, Edge-to-Edge \`WindowInsets\` & System-Bar-Kontrast, Hardware-/Gesten-Zurück-Navigation sowie \`WorkManager\` Hintergrund-Abgleich.
+
+          ## 🔐 Integrität & Signatur
+          - **Paketname**: \`io.github.mixxermannipro.openhealth\`
+          - **Version**: \`${TAG}\`
+          - **Android-Kompatibilität**: Android 8.0 (API 26) – Android 16 (API 36)
+          - **Signatur**: APK Signature Scheme v2 & v3 verifiziert
+          - **SHA-256**: \`${APK_SHA256}\`
+
+          ## ⚖️ Lizenz
+          Veröffentlicht unter der **GNU Affero General Public License v3.0 (GNU AGPL-3.0)**.
+          EOF
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "release-out/${APK_NAME}" "release-out/${APK_NAME}.sha256" --clobber
+            gh release edit "${TAG}" --title "KADENZ · OpenHealth ${TAG} (Android APK)" --notes-file release-notes.md --latest
+          else
+            gh release create "${TAG}" \
+              "release-out/${APK_NAME}" \
+              "release-out/${APK_NAME}.sha256" \
+              --title "KADENZ · OpenHealth ${TAG} (Android APK)" \
+              --notes-file release-notes.md \
+              --latest
+          fi
