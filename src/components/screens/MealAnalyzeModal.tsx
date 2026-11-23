@@ -31,6 +31,11 @@ import {
   searchOpenFoodFacts,
 } from '../../services/openFoodFacts';
 import { IncomingSharePayload } from '../../services/mealShareReceiver';
+import {
+  ensureNativeCameraPermission,
+  readTextFromClipboard,
+  writeTextToClipboard,
+} from '../../services/androidBridge';
 import { BottomSheet } from '../ui/BottomSheet';
 import { SNAPPY_SPRING } from '../ui/MotionPrimitives';
 import { haptics } from '../../utils/haptics';
@@ -210,13 +215,13 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
   }, [mode]);
 
   const handleCopyPrompt = async () => {
-    try {
-      await navigator.clipboard.writeText(promptTemplate);
+    const ok = await writeTextToClipboard(promptTemplate);
+    if (ok) {
       haptics.success();
       setPromptCopied(true);
       showToast('KI-Prompt in die Zwischenablage kopiert.', 'success');
       window.setTimeout(() => setPromptCopied(false), 2400);
-    } catch {
+    } else {
       haptics.tick();
       showToast('Prompt konnte nicht automatisch kopiert werden.', 'warning');
     }
@@ -225,11 +230,11 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
   const handlePasteFromClipboard = async () => {
     setClipboardFeedback(null);
     try {
-      if (!navigator.clipboard?.readText) {
+      const clipText = await readTextFromClipboard();
+      if (clipText === null) {
         throw new Error('clipboard_unavailable');
       }
-      const clipText = await navigator.clipboard.readText();
-      if (!clipText || !clipText.trim()) {
+      if (!clipText.trim()) {
         haptics.warning();
         setClipboardFeedback('Zwischenablage ist leer. Kopiere zuerst die Antwort aus deiner KI-App.');
         return;
@@ -240,7 +245,7 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
     } catch {
       haptics.tick();
       setClipboardFeedback(
-        'Browser blockiert direkten Zugriff — tippe in das Textfeld und füge dort ein (Strg+V / Einfügen).'
+        'Direkter Zugriff blockiert — tippe in das Textfeld und füge dort ein (Einfügen).'
       );
       aiTextareaRef.current?.focus();
     }
@@ -339,25 +344,34 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
 
   const startCameraScanner = async () => {
     setBarcodeError(null);
-    const BarcodeDetectorCtor = (window as unknown as {
-      BarcodeDetector?: new (opts: { formats: string[] }) => {
-        detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]>;
-      };
-    }).BarcodeDetector;
 
-    if (!navigator.mediaDevices?.getUserMedia || !BarcodeDetectorCtor) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       setBarcodeError(
-        'Kamera-Barcode-Erkennung wird in diesem Browser nicht unterstützt — EAN-Nummer einfach unten eingeben.'
+        'Kamera wird auf diesem Gerät nicht unterstützt — EAN-Nummer einfach unten eingeben.'
+      );
+      return;
+    }
+
+    // On native Android, request CAMERA runtime permission cleanly before opening WebView camera
+    const permissionGranted = await ensureNativeCameraPermission();
+    if (!permissionGranted) {
+      setBarcodeError(
+        'Kameraberechtigung verweigert. Du kannst sie in den Android-App-Einstellungen freigeben oder die EAN direkt eingeben.'
       );
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
       });
       streamRef.current = stream;
-      // Mount <video> first; the effect below attaches srcObject and starts detection cleanly
+      // Mount <video> first; the effect below attaches srcObject and starts native BarcodeDetector or ZXing fallback
       setCameraActive(true);
     } catch {
       stopCamera();
@@ -365,11 +379,12 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
     }
   };
 
-  // Attach acquired MediaStream once <video> has mounted & run BarcodeDetector safely
+  // Attach acquired MediaStream once <video> has mounted & decode barcodes via native BarcodeDetector or ZXing offline fallback
   useEffect(() => {
     if (!cameraActive || !streamRef.current) return;
     let cancelled = false;
     let rafId = 0;
+    let zxingStop: (() => void) | null = null;
 
     const BarcodeDetectorCtor = (window as unknown as {
       BarcodeDetector?: new (opts: { formats: string[] }) => {
@@ -378,41 +393,101 @@ export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
     }).BarcodeDetector;
 
     const videoEl = videoRef.current;
-    if (!videoEl || !BarcodeDetectorCtor) return;
+    if (!videoEl) return;
 
     videoEl.srcObject = streamRef.current;
     videoEl.play().catch(() => {});
 
-    const detector = new BarcodeDetectorCtor({
-      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'],
-    });
-
-    const scanLoop = async () => {
-      if (cancelled || !streamRef.current || !videoRef.current) return;
-      try {
-        if (videoRef.current.readyState >= 2) {
-          const codes = await detector.detect(videoRef.current);
-          if (!cancelled && codes.length > 0 && codes[0].rawValue) {
-            const rawCode = codes[0].rawValue;
-            stopCamera();
-            setBarcodeInput(rawCode);
-            await handleLookupBarcode(rawCode);
-            return;
-          }
-        }
-      } catch {
-        // continue scanning frames
-      }
-      if (!cancelled) {
-        rafId = window.requestAnimationFrame(scanLoop);
-      }
+    const onDetectedCode = async (rawCode: string) => {
+      if (cancelled) return;
+      const clean = rawCode.replace(/\D/g, '');
+      if (clean.length < 8) return;
+      cancelled = true;
+      zxingStop?.();
+      stopCamera();
+      setBarcodeInput(clean);
+      await handleLookupBarcode(clean);
     };
 
-    rafId = window.requestAnimationFrame(scanLoop);
+    if (BarcodeDetectorCtor) {
+      const detector = new BarcodeDetectorCtor({
+        formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'],
+      });
+
+      const scanLoop = async () => {
+        if (cancelled || !streamRef.current || !videoRef.current) return;
+        try {
+          if (videoRef.current.readyState >= 2) {
+            const codes = await detector.detect(videoRef.current);
+            if (!cancelled && codes.length > 0 && codes[0].rawValue) {
+              await onDetectedCode(codes[0].rawValue);
+              return;
+            }
+          }
+        } catch {
+          // continue scanning frames
+        }
+        if (!cancelled) {
+          rafId = window.requestAnimationFrame(scanLoop);
+        }
+      };
+
+      rafId = window.requestAnimationFrame(scanLoop);
+    } else {
+      // Universal Android WebView offline fallback via @zxing/browser (no Google Play Services required)
+      (async () => {
+        try {
+          const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
+            import('@zxing/browser'),
+            import('@zxing/library'),
+          ]);
+          if (cancelled || !streamRef.current || !videoRef.current) return;
+          const hints = new Map();
+          hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+            BarcodeFormat.EAN_13,
+            BarcodeFormat.EAN_8,
+            BarcodeFormat.UPC_A,
+            BarcodeFormat.UPC_E,
+            BarcodeFormat.CODE_128,
+          ]);
+          const reader = new BrowserMultiFormatReader(hints, {
+            delayBetweenScanAttempts: 250,
+            delayBetweenScanSuccess: 500,
+          });
+          const controls = await reader.decodeFromStream(
+            streamRef.current,
+            videoRef.current,
+            (result) => {
+              if (!cancelled && result?.getText()) {
+                onDetectedCode(result.getText());
+              }
+            }
+          );
+          zxingStop = () => {
+            try {
+              controls.stop();
+            } catch {
+              // ignore cleanup errors
+            }
+          };
+          if (cancelled) {
+            zxingStop();
+          }
+        } catch {
+          if (!cancelled) {
+            setBarcodeError(
+              'Kamera-Scanner konnte nicht gestartet werden — EAN-Nummer einfach unten eingeben.'
+            );
+            stopCamera();
+          }
+        }
+      })();
+    }
 
     return () => {
       cancelled = true;
       if (rafId) window.cancelAnimationFrame(rafId);
+      zxingStop?.();
     };
   }, [cameraActive]);
 

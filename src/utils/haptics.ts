@@ -51,10 +51,12 @@ export function setHapticsEnabled(enabled: boolean): void {
   }
 }
 
+import { isNativeAndroid, triggerNativeAndroidHaptic } from '../services/androidBridge';
+
 export function isHapticsSupported(): boolean {
   return (
-    typeof navigator !== 'undefined' &&
-    typeof navigator.vibrate === 'function'
+    isNativeAndroid() ||
+    (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function')
   );
 }
 
@@ -71,6 +73,9 @@ export function triggerHaptic(pattern: HapticPatternName = 'selection'): boolean
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     ) {
       return false;
+    }
+    if (isNativeAndroid()) {
+      return triggerNativeAndroidHaptic(pattern);
     }
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       return Boolean(navigator.vibrate(HAPTIC_PATTERNS[pattern]));

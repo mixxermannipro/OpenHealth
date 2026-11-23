@@ -42,6 +42,20 @@ import { FileImportResult } from '../providers/fileImporters';
 import { addDaysToKey, toLocalDateKey } from '../utils/formatters';
 import { getActiveLocale, setActiveLocaleSync } from '../i18n/translations';
 import { calculateAgeFromBirthDate, estimateMaxHrTanaka } from '../utils/biometrics';
+import {
+  checkHealthConnectPermissions,
+  configureNativeBackgroundSync,
+  getHealthConnectStatus,
+  HealthConnectPermissionSummary,
+  HealthConnectStatus,
+  isNativeAndroid,
+  openHealthConnectSettings,
+  requestHealthConnectPermissions,
+  syncHealthConnectBatch,
+  writeHydrationToHealthConnect,
+  writeMealToHealthConnect,
+  writeWeightToHealthConnect,
+} from '../services/androidBridge';
 
 function mergeUniqueRecords<T extends { id: string; sourceRecordId?: string }>(
   existing: T[],
@@ -213,6 +227,8 @@ interface HealthStoreState {
   favoriteMeals: FavoriteMeal[];
   selectedWorkoutId: string | null;
   lastSyncReport: DeduplicationReport | null;
+  healthConnectStatus: HealthConnectStatus | null;
+  healthConnectPermissions: HealthConnectPermissionSummary | null;
   toast: ToastMessage | null;
 
   initialize: () => Promise<void>;
@@ -258,6 +274,11 @@ interface HealthStoreState {
   copyMealsFromYesterday: (targetDateKey: string, category?: MealCategory) => Promise<number>;
   addWaterMl: (dateKey: string, deltaMl: number) => Promise<void>;
 
+  refreshHealthConnectStatus: () => Promise<void>;
+  connectHealthConnect: () => Promise<boolean>;
+  syncHealthConnect: (options?: { silent?: boolean; daysBack?: number }) => Promise<DeduplicationReport | null>;
+  openHealthConnectAppSettings: () => Promise<void>;
+
   connectSimulatedProvider: (providerId: DeviceProviderId) => Promise<void>;
   disconnectProvider: (providerId: DeviceProviderId) => Promise<void>;
   simulateProviderSync: (providerId: DeviceProviderId) => Promise<DeduplicationReport | null>;
@@ -299,6 +320,8 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
   favoriteMeals: [],
   selectedWorkoutId: null,
   lastSyncReport: null,
+  healthConnectStatus: null,
+  healthConnectPermissions: null,
   toast: null,
 
   initialize: async () => {
@@ -320,6 +343,8 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
         db.profiles.put(hydratedProfile).catch(() => {});
       }
 
+      const nextAiPrivacy = { ...DEFAULT_AI_PRIVACY_SETTINGS, ...(persisted.aiPrivacy || {}) };
+
       set({
         initialized: true,
         todayKey,
@@ -327,7 +352,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
         scenarioId: persisted.scenarioId || 'balanced',
         theme: persisted.theme || 'dark',
         locale: hydratedLocale,
-        aiPrivacy: { ...DEFAULT_AI_PRIVACY_SETTINGS, ...(persisted.aiPrivacy || {}) },
+        aiPrivacy: nextAiPrivacy,
         profile: hydratedProfile,
         connectedSources:
           persisted.connectedSources && persisted.connectedSources.length > 0
@@ -345,6 +370,11 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
         hydrationEntries: persisted.hydrationEntries || [],
         favoriteMeals: persisted.favoriteMeals || [],
       });
+
+      if (isNativeAndroid()) {
+        configureNativeBackgroundSync(nextAiPrivacy.backgroundSync).catch(() => {});
+        get().refreshHealthConnectStatus().catch(() => {});
+      }
       return;
     }
 
@@ -396,6 +426,11 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       hydrationEntries: [],
       favoriteMeals: [],
     });
+
+    if (isNativeAndroid()) {
+      configureNativeBackgroundSync(DEFAULT_AI_PRIVACY_SETTINGS.backgroundSync).catch(() => {});
+      get().refreshHealthConnectStatus().catch(() => {});
+    }
     })().finally(() => {
       initializeInFlight = null;
     });
@@ -439,6 +474,9 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
     const next = { ...get().aiPrivacy, ...updates };
     set({ aiPrivacy: next });
     await db.meta.put({ key: 'aiPrivacy', value: next });
+    if (updates.backgroundSync !== undefined && isNativeAndroid()) {
+      configureNativeBackgroundSync(next.backgroundSync).catch(() => {});
+    }
   },
 
   showToast: (text, tone = 'neutral') => {
@@ -474,10 +512,19 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       updatedAt: nowIso,
     };
 
+    const wantsNativeHealthConnect = isNativeAndroid() && selectedProviders.includes('health_connect');
+
     const updatedSources = state.connectedSources.map((s) => ({
       ...s,
-      connected: selectedProviders.includes(s.providerId),
-      lastSyncAt: selectedProviders.includes(s.providerId) ? nowIso : null,
+      connected: s.providerId === 'health_connect' && isNativeAndroid()
+        ? false
+        : selectedProviders.includes(s.providerId),
+      lastSyncAt:
+        s.providerId === 'health_connect' && isNativeAndroid()
+          ? null
+          : selectedProviders.includes(s.providerId)
+            ? nowIso
+            : null,
     }));
 
     // Record user's real initial body weight measurement for today
@@ -508,6 +555,10 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
     await db.profiles.put(updatedProfile);
     await db.sources.bulkPut(updatedSources);
     await db.bodyMeasurements.put(initialBody);
+
+    if (wantsNativeHealthConnect) {
+      get().connectHealthConnect().catch(() => {});
+    }
   },
 
   redoOnboarding: async () => {
@@ -686,6 +737,9 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
     if (shouldUpdateProfile) {
       await db.profiles.put(nextProfile);
     }
+    if (isNativeAndroid() && get().healthConnectPermissions?.hasWriteAccess) {
+      writeWeightToHealthConnect(rounded).catch(() => {});
+    }
     get().showToast(`Gewicht (${rounded.toFixed(1).replace('.', ',')} kg) gespeichert.`, 'success');
   },
 
@@ -693,6 +747,9 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
     const next = [meal, ...get().meals];
     set({ meals: next });
     await db.meals.put(meal);
+    if (isNativeAndroid() && get().healthConnectPermissions?.hasWriteAccess) {
+      writeMealToHealthConnect(meal).catch(() => {});
+    }
     get().showToast(`${meal.title} (+${meal.totalCalories} kcal) gespeichert.`, 'success');
   },
 
@@ -822,6 +879,237 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
     const nextList = [...state.hydrationEntries.filter((h) => h.date !== dateKey), updated];
     set({ hydrationEntries: nextList });
     await db.hydrationEntries.put(updated);
+    if (deltaMl > 0 && isNativeAndroid() && get().healthConnectPermissions?.hasWriteAccess) {
+      writeHydrationToHealthConnect(deltaMl).catch(() => {});
+    }
+  },
+
+  refreshHealthConnectStatus: async () => {
+    if (!isNativeAndroid()) return;
+    try {
+      const status = await getHealthConnectStatus();
+      const permissions = status.available ? await checkHealthConnectPermissions() : null;
+      const state = get();
+      const hasAccess = Boolean(permissions?.hasReadAccess);
+
+      const hcSource = state.connectedSources.find((s) => s.providerId === 'health_connect');
+      if (hcSource && hcSource.connected !== hasAccess) {
+        const updatedSources = state.connectedSources.map((s) =>
+          s.providerId === 'health_connect'
+            ? {
+                ...s,
+                connected: hasAccess,
+                isDemoSimulation: false,
+                comingSoon: false,
+              }
+            : s
+        );
+        set({
+          healthConnectStatus: status,
+          healthConnectPermissions: permissions,
+          connectedSources: updatedSources,
+        });
+        await db.sources.bulkPut(updatedSources);
+      } else {
+        set({
+          healthConnectStatus: status,
+          healthConnectPermissions: permissions,
+        });
+      }
+    } catch {
+      // Ignore transient status read issues
+    }
+  },
+
+  connectHealthConnect: async () => {
+    if (!isNativeAndroid()) {
+      get().showToast(
+        'Android Health Connect steht direkt in der installierten Android-App zur Verfügung.',
+        'neutral'
+      );
+      return false;
+    }
+
+    try {
+      const status = await getHealthConnectStatus();
+      set({ healthConnectStatus: status });
+
+      if (!status.available) {
+        if (status.status === 'provider_update_required') {
+          get().showToast(
+            'Health Connect muss zuerst im Play Store aktualisiert oder installiert werden.',
+            'warning'
+          );
+          await openHealthConnectSettings();
+        } else {
+          get().showToast(
+            'Android Health Connect wird auf diesem Gerät leider nicht unterstützt.',
+            'warning'
+          );
+        }
+        return false;
+      }
+
+      const perms = await requestHealthConnectPermissions(true);
+      set({ healthConnectPermissions: perms });
+
+      if (!perms.hasReadAccess) {
+        get().showToast(
+          'Keine Health-Connect-Leseberechtigung erteilt. Du kannst sie jederzeit nachholen.',
+          'warning'
+        );
+        return false;
+      }
+
+      const nowIso = new Date().toISOString();
+      const updatedSources = get().connectedSources.map((s) =>
+        s.providerId === 'health_connect'
+          ? {
+              ...s,
+              connected: true,
+              isDemoSimulation: false,
+              comingSoon: false,
+              lastSyncAt: nowIso,
+            }
+          : s
+      );
+      set({ connectedSources: updatedSources });
+      await db.sources.bulkPut(updatedSources);
+
+      get().showToast(
+        `Health Connect verbunden (${perms.grantedCount} Berechtigungen aktiv). Synchronisiere…`,
+        'success'
+      );
+      await get().syncHealthConnect({ silent: false, daysBack: 30 });
+      return true;
+    } catch {
+      get().showToast('Health Connect konnte nicht geöffnet werden.', 'warning');
+      return false;
+    }
+  },
+
+  syncHealthConnect: async (options = {}) => {
+    if (!isNativeAndroid()) return null;
+    if (get().isSyncing) return null;
+
+    const { silent = false, daysBack = 30 } = options;
+    set({ isSyncing: true });
+
+    try {
+      const status = await getHealthConnectStatus();
+      const perms = status.available ? await checkHealthConnectPermissions() : null;
+      set({ healthConnectStatus: status, healthConnectPermissions: perms });
+
+      if (!status.available || !perms?.hasReadAccess) {
+        set({ isSyncing: false });
+        if (!silent) {
+          get().showToast(
+            'Bitte verbinde zuerst Health Connect und erteile die Leseberechtigungen.',
+            'warning'
+          );
+        }
+        return null;
+      }
+
+      const state = get();
+      const batch = await syncHealthConnectBatch(state.profile, daysBack);
+      const merged = mergeSyncedBatch(
+        {
+          workouts: state.workouts,
+          hrvObservations: state.hrvObservations,
+          rhrObservations: state.rhrObservations,
+          sleepSessions: state.sleepSessions,
+          dailyActivities: state.dailyActivities,
+          bodyMeasurements: state.bodyMeasurements,
+          hydrationEntries: state.hydrationEntries,
+        },
+        batch,
+        state.sourcePriorities
+      );
+
+      const importedTotal =
+        merged.report.importedWorkouts + merged.report.importedObservations;
+
+      const updatedSources = state.connectedSources.map((s) =>
+        s.providerId === 'health_connect'
+          ? {
+              ...s,
+              connected: true,
+              isDemoSimulation: false,
+              comingSoon: false,
+              lastSyncAt: batch.syncedAt,
+              syncedRecordCount: s.syncedRecordCount + importedTotal,
+            }
+          : s
+      );
+
+      // Keep profile weight synced if Health Connect delivered a newer measurement
+      const latestBody = merged.bodyMeasurements[merged.bodyMeasurements.length - 1];
+      const nextProfile =
+        latestBody && latestBody.weightKg !== state.profile.weightKg && latestBody.date >= state.todayKey
+          ? { ...state.profile, weightKg: latestBody.weightKg, updatedAt: batch.syncedAt }
+          : state.profile;
+
+      set({
+        isSyncing: false,
+        profile: nextProfile,
+        connectedSources: updatedSources,
+        workouts: merged.workouts,
+        hrvObservations: merged.hrvObservations,
+        rhrObservations: merged.rhrObservations,
+        sleepSessions: merged.sleepSessions,
+        dailyActivities: merged.dailyActivities,
+        bodyMeasurements: merged.bodyMeasurements,
+        hydrationEntries: merged.hydrationEntries,
+        lastSyncReport: merged.report,
+      });
+
+      await saveFullPersistedState({
+        scenarioId: state.scenarioId,
+        theme: state.theme,
+        locale: state.locale,
+        aiPrivacy: state.aiPrivacy,
+        profile: nextProfile,
+        connectedSources: updatedSources,
+        sourcePriorities: state.sourcePriorities,
+        hrvObservations: merged.hrvObservations,
+        rhrObservations: merged.rhrObservations,
+        sleepSessions: merged.sleepSessions,
+        workouts: merged.workouts,
+        dailyActivities: merged.dailyActivities,
+        bodyMeasurements: merged.bodyMeasurements,
+        journalEntries: state.journalEntries,
+        meals: state.meals,
+        hydrationEntries: merged.hydrationEntries,
+        favoriteMeals: state.favoriteMeals,
+      });
+
+      if (!silent) {
+        if (importedTotal > 0) {
+          get().showToast(
+            `Health Connect: ${merged.report.importedWorkouts} Trainings & ${merged.report.importedObservations} Messwerte synchronisiert.`,
+            'success'
+          );
+        } else {
+          get().showToast('Health Connect ist auf dem neuesten Stand.', 'success');
+        }
+      }
+      return merged.report;
+    } catch {
+      set({ isSyncing: false });
+      if (!silent) {
+        get().showToast('Fehler beim Abgleich mit Health Connect.', 'warning');
+      }
+      return null;
+    }
+  },
+
+  openHealthConnectAppSettings: async () => {
+    try {
+      await openHealthConnectSettings();
+    } catch {
+      get().showToast('Health Connect Einstellungen konnten nicht geöffnet werden.', 'warning');
+    }
   },
 
   connectSimulatedProvider: async (providerId) => {

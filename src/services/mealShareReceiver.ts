@@ -141,12 +141,16 @@ export function dispatchIncomingShareIntent(payload: IncomingSharePayload): void
   window.dispatchEvent(new CustomEvent<IncomingSharePayload>(SHARE_INTENT_EVENT, { detail: payload }));
 }
 
+import { subscribeToNativeIntents } from './androidBridge';
+
 /**
- * Subscribes to both cold-start URL share payloads and running-app (`onNewIntent` / `popstate` /
- * `hashchange` / `BroadcastChannel`) share payloads.
+ * Subscribes to both cold-start URL share payloads, native Android Intents
+ * (`ACTION_SEND`, `caltrack://`, `kadenz://`, launcher shortcuts), and running-app
+ * (`onNewIntent` / `popstate` / `hashchange` / `BroadcastChannel`) share payloads.
  */
 export function subscribeToIncomingMealShares(
-  onReceive: (payload: IncomingSharePayload) => void
+  onReceive: (payload: IncomingSharePayload) => void,
+  onTabShortcut?: (tab: string) => void
 ): () => void {
   if (typeof window === 'undefined') return () => {};
 
@@ -158,8 +162,21 @@ export function subscribeToIncomingMealShares(
     }
   };
 
-  // Cold start check
+  // Cold start check (web URL)
   checkCurrentUrl();
+
+  // Native Android cold-start & warm onNewIntent bridge
+  const unsubscribeNative = subscribeToNativeIntents((event) => {
+    if (event.kind === 'tab_shortcut') {
+      onTabShortcut?.(event.rawText);
+      return;
+    }
+    onReceive({
+      rawText: event.rawText,
+      origin: event.kind === 'deeplink' ? 'deeplink' : 'share_intent',
+      receivedAt: event.receivedAt,
+    });
+  });
 
   // Running app listeners (singleTop / hash / history / ServiceWorker BroadcastChannel)
   const handleCustomEvent = (e: Event) => {
@@ -189,6 +206,7 @@ export function subscribeToIncomingMealShares(
   }
 
   return () => {
+    unsubscribeNative();
     window.removeEventListener('popstate', checkCurrentUrl);
     window.removeEventListener('hashchange', checkCurrentUrl);
     window.removeEventListener(SHARE_INTENT_EVENT, handleCustomEvent);

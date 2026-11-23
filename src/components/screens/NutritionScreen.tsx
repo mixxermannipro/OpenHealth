@@ -43,6 +43,7 @@ import { InfoButton } from '../ui/InfoButton';
 import { CircularProgressRing } from '../ui/LiquidPrimitives';
 import { AnimatedNumber, APPLE_EASE, SNAPPY_SPRING } from '../ui/MotionPrimitives';
 import { MealModalMode } from './MealAnalyzeModal';
+import { readTextFromClipboard } from '../../services/androidBridge';
 import { NutritionOnboarding } from './NutritionOnboarding';
 import { addDaysToKey, formatGermanShortDate, formatNumberDE } from '../../utils/formatters';
 import { useI18n } from '../../i18n/useI18n';
@@ -162,13 +163,11 @@ export const NutritionScreen: React.FC<NutritionScreenProps> = ({
 
   const handleQuickClipboardImport = async () => {
     try {
-      if (navigator.clipboard?.readText) {
-        const text = await navigator.clipboard.readText();
-        if (text && text.trim().length > 0) {
-          haptics.success();
-          onOpenMealModal('ai', undefined, text);
-          return;
-        }
+      const text = await readTextFromClipboard();
+      if (text && text.trim().length > 0) {
+        haptics.success();
+        onOpenMealModal('ai', undefined, text);
+        return;
       }
     } catch {
       // Fallback: open AI Import sheet cleanly for manual paste

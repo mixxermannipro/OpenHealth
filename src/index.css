@@ -101,10 +101,13 @@
   }
 
   .pb-safe {
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-bottom: max(0.75rem, var(--android-safe-bottom, env(safe-area-inset-bottom, 0px)));
   }
   .mb-safe {
-    margin-bottom: env(safe-area-inset-bottom, 0px);
+    margin-bottom: var(--android-safe-bottom, env(safe-area-inset-bottom, 0px));
+  }
+  .pt-safe {
+    padding-top: var(--android-safe-top, env(safe-area-inset-top, 0px));
   }
 }
 

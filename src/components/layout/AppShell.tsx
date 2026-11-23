@@ -243,7 +243,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
-        <div className="mx-auto w-full max-w-[540px] lg:max-w-[1040px] px-4 sm:px-6 lg:px-10 pt-5 sm:pt-7 pb-28 lg:pb-12">
+        <div className="mx-auto w-full max-w-[540px] lg:max-w-[1040px] px-4 sm:px-6 lg:px-10 pt-[calc(1.25rem+var(--android-safe-top,env(safe-area-inset-top,0px)))] sm:pt-[calc(1.75rem+var(--android-safe-top,env(safe-area-inset-top,0px)))] pb-[calc(7rem+var(--android-safe-bottom,env(safe-area-inset-bottom,0px)))] lg:pb-12">
           {children}
         </div>
       </main>
@@ -257,7 +257,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           scale: navVisible ? 1 : 0.92,
         }}
         transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.85 }}
-        className="lg:hidden fixed bottom-0 inset-x-0 z-30 pointer-events-none flex justify-center px-4 pb-[max(0.85rem,env(safe-area-inset-bottom))]"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-30 pointer-events-none flex justify-center px-4 pb-[max(0.85rem,var(--android-safe-bottom,env(safe-area-inset-bottom,0px)))]"
       >
         <nav
           aria-label="Mobile Navigation"
@@ -309,7 +309,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -12, scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 420, damping: 30 }}
-            className="fixed top-4 right-4 left-4 sm:left-auto sm:max-w-sm z-50 liquid-glass rounded-2xl px-4 py-3 flex items-center gap-3"
+            className="fixed top-[calc(1rem+var(--android-safe-top,env(safe-area-inset-top,0px)))] right-4 left-4 sm:left-auto sm:max-w-sm z-50 liquid-glass rounded-2xl px-4 py-3 flex items-center gap-3"
             role="status"
           >
             {toast.tone === 'success' ? (

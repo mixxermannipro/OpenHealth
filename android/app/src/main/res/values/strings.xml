@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KADENZ</string>
+    <string name="title_activity_main">KADENZ</string>
+    <string name="package_name">io.github.mixxermannipro.openhealth</string>
+    <string name="custom_url_scheme">kadenz</string>
+    <string name="share_meal_label">Mahlzeit in KADENZ übernehmen</string>
+    <string name="privacy_rationale_title">KADENZ Datenschutz &amp; Health Connect</string>
+    <string name="shortcut_meal_short">Essen</string>
+    <string name="shortcut_meal_long">Mahlzeit erfassen</string>
+    <string name="shortcut_sleep_short">Schlaf</string>
+    <string name="shortcut_sleep_long">Schlaf ansehen</string>
+</resources>

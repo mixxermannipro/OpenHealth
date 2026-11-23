@@ -287,7 +287,7 @@ export const OnboardingScreen: React.FC = () => {
 
   return (
     <div className="min-h-dvh bg-[var(--bg-canvas)] text-[var(--text-primary)] flex flex-col">
-      <div className="mx-auto w-full max-w-xl flex-1 flex flex-col justify-between px-4 sm:px-6 py-6 sm:py-10">
+      <div className="mx-auto w-full max-w-xl flex-1 flex flex-col justify-between px-4 sm:px-6 pt-[calc(1.5rem+var(--android-safe-top,env(safe-area-inset-top,0px)))] pb-[calc(1.5rem+var(--android-safe-bottom,env(safe-area-inset-bottom,0px)))] sm:py-10">
         {/* Top Brand, Step Progress & Compact Language Selector */}
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="log_meal"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_meal_short"
+        android:shortcutLongLabel="@string/shortcut_meal_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="io.github.mixxermannipro.openhealth"
+            android:targetClass="io.github.mixxermannipro.openhealth.MainActivity">
+            <extra android:name="kadenz_tab" android:value="nutrition" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="view_sleep"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_sleep_short"
+        android:shortcutLongLabel="@string/shortcut_sleep_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="io.github.mixxermannipro.openhealth"
+            android:targetClass="io.github.mixxermannipro.openhealth.MainActivity">
+            <extra android:name="kadenz_tab" android:value="sleep" />
+        </intent>
+    </shortcut>
+</shortcuts>

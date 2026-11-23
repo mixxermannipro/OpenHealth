@@ -1,8 +1,10 @@
 import {
+  BodyMeasurement,
   ConnectedSource,
   DailyActivitySummary,
   DeviceProviderId,
   HRVObservation,
+  HydrationEntry,
   RestingHeartRateObservation,
   SleepSession,
   SourcePriorityPreferences,
@@ -20,6 +22,8 @@ export interface SyncBatchPayload {
   rhrObservations: RestingHeartRateObservation[];
   sleepSessions: SleepSession[];
   dailyActivities: DailyActivitySummary[];
+  bodyMeasurements?: BodyMeasurement[];
+  hydrationEntries?: HydrationEntry[];
 }
 
 export interface DeduplicationReport {
@@ -274,6 +278,8 @@ export function mergeSyncedBatch(
     rhrObservations: RestingHeartRateObservation[];
     sleepSessions: SleepSession[];
     dailyActivities: DailyActivitySummary[];
+    bodyMeasurements?: BodyMeasurement[];
+    hydrationEntries?: HydrationEntry[];
   },
   batch: SyncBatchPayload,
   priorities: SourcePriorityPreferences
@@ -283,6 +289,8 @@ export function mergeSyncedBatch(
   rhrObservations: RestingHeartRateObservation[];
   sleepSessions: SleepSession[];
   dailyActivities: DailyActivitySummary[];
+  bodyMeasurements: BodyMeasurement[];
+  hydrationEntries: HydrationEntry[];
   report: DeduplicationReport;
 } {
   const nextWorkouts = [...current.workouts];
@@ -290,6 +298,8 @@ export function mergeSyncedBatch(
   const nextRhr = [...current.rhrObservations];
   const nextSleep = [...current.sleepSessions];
   const nextActivities = [...current.dailyActivities];
+  const nextBody = [...(current.bodyMeasurements ?? [])];
+  const nextHydration = [...(current.hydrationEntries ?? [])];
 
   let importedWorkouts = 0;
   let deduplicatedWorkouts = 0;
@@ -322,7 +332,9 @@ export function mergeSyncedBatch(
     const idx = nextHrv.findIndex((ex) => ex.date === h.date);
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (h.sourceProvider === priorities.heartRate) nextHrv[idx] = h;
+      if (h.sourceProvider === priorities.heartRate || nextHrv[idx].sourceRecordId === h.sourceRecordId) {
+        nextHrv[idx] = h;
+      }
     } else {
       nextHrv.push(h);
       importedObservations++;
@@ -333,9 +345,34 @@ export function mergeSyncedBatch(
     const idx = nextRhr.findIndex((ex) => ex.date === r.date);
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (r.sourceProvider === priorities.heartRate) nextRhr[idx] = r;
+      if (r.sourceProvider === priorities.heartRate || nextRhr[idx].sourceRecordId === r.sourceRecordId) {
+        nextRhr[idx] = r;
+      }
     } else {
       nextRhr.push(r);
+      importedObservations++;
+    }
+  }
+
+  for (const s of batch.sleepSessions) {
+    const idx = nextSleep.findIndex(
+      (ex) =>
+        (ex.sourceRecordId && ex.sourceRecordId === s.sourceRecordId) ||
+        ex.date === s.date
+    );
+    if (idx !== -1) {
+      deduplicatedObservations++;
+      const existing = nextSleep[idx];
+      if (
+        s.sourceProvider === priorities.sleep ||
+        existing.sourceRecordId === s.sourceRecordId ||
+        (s.hasStageData && !existing.hasStageData) ||
+        s.totalSleepMinutes > existing.totalSleepMinutes
+      ) {
+        nextSleep[idx] = s;
+      }
+    } else {
+      nextSleep.push(s);
       importedObservations++;
     }
   }
@@ -344,12 +381,54 @@ export function mergeSyncedBatch(
     const idx = nextActivities.findIndex((ex) => ex.date === a.date);
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (a.sourceProvider === priorities.steps) {
-        nextActivities[idx] = { ...nextActivities[idx], ...a };
+      const existing = nextActivities[idx];
+      if (
+        a.sourceProvider === priorities.steps ||
+        existing.sourceRecordId === a.sourceRecordId ||
+        a.steps > existing.steps
+      ) {
+        nextActivities[idx] = {
+          ...existing,
+          ...a,
+          steps: Math.max(existing.steps, a.steps),
+          activeMinutes: Math.max(existing.activeMinutes, a.activeMinutes),
+          activeCaloriesKcal: a.activeCaloriesKcal ?? existing.activeCaloriesKcal,
+          vo2MaxEstimate: a.vo2MaxEstimate ?? existing.vo2MaxEstimate,
+          spo2Percent: a.spo2Percent ?? existing.spo2Percent,
+          respiratoryRateBpm: a.respiratoryRateBpm ?? existing.respiratoryRateBpm,
+        };
       }
     } else {
       nextActivities.push(a);
       importedObservations++;
+    }
+  }
+
+  for (const b of batch.bodyMeasurements ?? []) {
+    const idx = nextBody.findIndex(
+      (ex) =>
+        (ex.sourceRecordId && ex.sourceRecordId === b.sourceRecordId) ||
+        ex.date === b.date
+    );
+    if (idx !== -1) {
+      deduplicatedObservations++;
+      if (b.sourceProvider === priorities.weight || nextBody[idx].sourceRecordId === b.sourceRecordId) {
+        nextBody[idx] = { ...nextBody[idx], ...b };
+      }
+    } else {
+      nextBody.push(b);
+      importedObservations++;
+    }
+  }
+
+  for (const hyd of batch.hydrationEntries ?? []) {
+    const idx = nextHydration.findIndex((ex) => ex.date === hyd.date);
+    if (idx !== -1) {
+      if (hyd.ml > nextHydration[idx].ml) {
+        nextHydration[idx] = hyd;
+      }
+    } else {
+      nextHydration.push(hyd);
     }
   }
 
@@ -359,6 +438,8 @@ export function mergeSyncedBatch(
     rhrObservations: nextRhr,
     sleepSessions: nextSleep,
     dailyActivities: nextActivities,
+    bodyMeasurements: nextBody.sort((a, b) => a.date.localeCompare(b.date)),
+    hydrationEntries: nextHydration,
     report: {
       importedWorkouts,
       deduplicatedWorkouts,

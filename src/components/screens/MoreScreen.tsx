@@ -57,6 +57,12 @@ import {
   isHapticsEnabled,
   setHapticsEnabled,
 } from '../../utils/haptics';
+import {
+  exportJsonBackupNative,
+  isNativeAndroid,
+  writeTextToClipboard,
+} from '../../services/androidBridge';
+import { formatClockFromIso } from '../../utils/formatters';
 
 interface MoreScreenProps {
   onOpenJournal: () => void;
@@ -81,6 +87,11 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     connectSimulatedProvider,
     disconnectProvider,
     simulateProviderSync,
+    connectHealthConnect,
+    syncHealthConnect,
+    openHealthConnectAppSettings,
+    healthConnectStatus,
+    healthConnectPermissions,
     importExternalHealthFile,
     exportAllAsJson,
     importFromJson,
@@ -100,6 +111,11 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       connectSimulatedProvider: s.connectSimulatedProvider,
       disconnectProvider: s.disconnectProvider,
       simulateProviderSync: s.simulateProviderSync,
+      connectHealthConnect: s.connectHealthConnect,
+      syncHealthConnect: s.syncHealthConnect,
+      openHealthConnectAppSettings: s.openHealthConnectAppSettings,
+      healthConnectStatus: s.healthConnectStatus,
+      healthConnectPermissions: s.healthConnectPermissions,
       importExternalHealthFile: s.importExternalHealthFile,
       exportAllAsJson: s.exportAllAsJson,
       importFromJson: s.importFromJson,
@@ -116,6 +132,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   const [importProvider, setImportProvider] = useState<DeviceProviderId>('coros');
   const healthFileInputRef = useRef<HTMLInputElement | null>(null);
   const jsonBackupInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeAndroid = isNativeAndroid();
 
   const handleToggleHaptics = (enabled: boolean) => {
     setHapticsOn(enabled);
@@ -153,14 +170,25 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     }
   };
 
-  const handleExportBackup = () => {
+  const handleExportBackup = async () => {
     haptics.success();
     const payload = exportAllAsJson();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const filename = `kadenz-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const jsonString = JSON.stringify(payload, null, 2);
+
+    if (nativeAndroid) {
+      const exported = await exportJsonBackupNative(filename, jsonString);
+      if (exported) {
+        showToast('Backup zum Speichern / Teilen geöffnet.', 'success');
+        return;
+      }
+    }
+
+    const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `kadenz-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
     showToast('Lokales Backup als JSON gespeichert.', 'success');
@@ -187,11 +215,11 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   };
 
   // =====================================================================
-  // SUB-VIEW 1: DATENQUELLEN (Exact Match to IMG-20261121-WA0010)
+  // SUB-VIEW 1: DATENQUELLEN (Real Android Health Connect + Open Imports)
   // =====================================================================
   if (detailView === 'sources') {
     const sourceIcon = (id: DeviceProviderId) => {
-      if (id === 'health_connect') return <Heart className="w-5 h-5 text-[var(--text-primary)]" />;
+      if (id === 'health_connect') return <Heart className="w-5 h-5 text-[var(--accent-recovery)]" />;
       if (id === 'coros') return <Watch className="w-5 h-5 text-[var(--text-primary)]" />;
       if (id === 'garmin') return <Triangle className="w-5 h-5 text-[var(--text-primary)] fill-current" />;
       if (id === 'polar') return <CircleDot className="w-5 h-5 text-[var(--text-primary)]" />;
@@ -202,6 +230,33 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     const primarySources = ORDER.map((id) =>
       connectedSources.find((s) => s.providerId === id)
     ).filter((s): s is NonNullable<typeof s> => Boolean(s));
+
+    const handleSourcePrimaryAction = (src: (typeof primarySources)[number]) => {
+      if (src.providerId === 'apple_health') {
+        setImportProvider('apple_health');
+        healthFileInputRef.current?.click();
+        return;
+      }
+      if (src.providerId === 'health_connect' && nativeAndroid) {
+        if (src.connected) {
+          syncHealthConnect({ silent: false, daysBack: 30 });
+        } else {
+          connectHealthConnect();
+        }
+        return;
+      }
+      if (nativeAndroid) {
+        // On Android, Garmin / COROS / Polar sync via Health Connect or open GPX/TCX files
+        setImportProvider(src.providerId);
+        healthFileInputRef.current?.click();
+        return;
+      }
+      if (src.connected) {
+        simulateProviderSync(src.providerId);
+      } else {
+        connectSimulatedProvider(src.providerId);
+      }
+    };
 
     return (
       <motion.div
@@ -226,7 +281,9 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
             {t.more.sourcesHero2}
           </h1>
           <p className="text-[14.5px] leading-relaxed text-[var(--text-secondary)] max-w-md">
-            {t.more.sourcesDesc}
+            {nativeAndroid
+              ? 'Verbinde Android Health Connect für echten Live-Abgleich von Schlaf, HRV, Puls, Schritten & Trainings — alle Wearables (Garmin, COROS, Polar, Samsung, Oura, Fitbit) fließen darüber lokal zusammen.'
+              : t.more.sourcesDesc}
           </p>
         </header>
 
@@ -238,7 +295,9 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
             </p>
             <div className="space-y-2.5">
               {primarySources.map((src) => {
+                const isHC = src.providerId === 'health_connect';
                 const isApple = src.providerId === 'apple_health';
+                const isWearableViaImport = nativeAndroid && !isHC && !isApple;
                 return (
                   <div
                     key={src.providerId}
@@ -246,16 +305,8 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                   >
                     <button
                       type="button"
-                      onClick={() => {
-                        if (isApple) {
-                          setImportProvider('apple_health');
-                          healthFileInputRef.current?.click();
-                        } else if (src.connected) {
-                          simulateProviderSync(src.providerId);
-                        } else {
-                          connectSimulatedProvider(src.providerId);
-                        }
-                      }}
+                      disabled={isSyncing}
+                      onClick={() => handleSourcePrimaryAction(src)}
                       className="flex-1 flex items-center gap-3.5 text-left min-w-0"
                     >
                       <span className="w-10 h-10 rounded-xl bg-[var(--bg-well)] flex items-center justify-center shrink-0">
@@ -265,12 +316,39 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                         <p className="text-[15.5px] font-semibold text-[var(--text-primary)] truncate">
                           {src.name}
                         </p>
-                        {src.connected ? (
+                        {isHC && nativeAndroid ? (
+                          src.connected ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)] flex-wrap">
+                              <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)] shrink-0" />
+                              <span>
+                                {t.more.connected}
+                                {healthConnectPermissions?.grantedCount
+                                  ? ` · ${healthConnectPermissions.grantedCount} Freigaben`
+                                  : ''}
+                                {src.lastSyncAt ? ` · ${formatClockFromIso(src.lastSyncAt)}` : ''}
+                              </span>
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <PlusCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>
+                                {healthConnectStatus?.status === 'provider_update_required'
+                                  ? 'Health Connect im Play Store installieren'
+                                  : 'Nativ auf Android verbinden'}
+                              </span>
+                            </p>
+                          )
+                        ) : isWearableViaImport ? (
+                          <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                            <Upload className="w-3.5 h-3.5 shrink-0" />
+                            <span>Über Health Connect oder GPX/TCX-Datei</span>
+                          </p>
+                        ) : src.connected ? (
                           <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
                             <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)]" />
                             <span>{t.more.connected}</span>
                           </p>
-                        ) : src.comingSoon ? (
+                        ) : isApple || src.comingSoon ? (
                           <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]">
                             <Clock className="w-3.5 h-3.5" />
                             <span>{t.more.xmlReady}</span>
@@ -285,7 +363,16 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                     </button>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {src.connected && (
+                      {isHC && nativeAndroid && src.connected && (
+                        <button
+                          type="button"
+                          onClick={() => openHealthConnectAppSettings()}
+                          className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
+                        >
+                          Rechte
+                        </button>
+                      )}
+                      {src.connected && !(isHC && nativeAndroid) && (
                         <button
                           type="button"
                           onClick={() => disconnectProvider(src.providerId)}
@@ -298,19 +385,14 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                         type="button"
                         aria-label={`${src.name} synchronisieren`}
                         disabled={isSyncing}
-                        onClick={() => {
-                          if (isApple) {
-                            setImportProvider('apple_health');
-                            healthFileInputRef.current?.click();
-                          } else if (src.connected) {
-                            simulateProviderSync(src.providerId);
-                          } else {
-                            connectSimulatedProvider(src.providerId);
-                          }
-                        }}
+                        onClick={() => handleSourcePrimaryAction(src)}
                         className="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                       >
-                        <ChevronRight className="w-4 h-4" />
+                        {isHC && nativeAndroid && isSyncing ? (
+                          <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent-recovery)]" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -409,13 +491,13 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     const promptTemplate = getZeroCostAiPromptTemplate(locale);
 
     const handleCopyPrompt = async () => {
-      try {
-        await navigator.clipboard.writeText(promptTemplate);
+      const ok = await writeTextToClipboard(promptTemplate);
+      if (ok) {
         haptics.success();
         setPromptCopied(true);
         showToast('0 € KI-Prompt in die Zwischenablage kopiert.', 'success');
         window.setTimeout(() => setPromptCopied(false), 2400);
-      } catch {
+      } else {
         haptics.warning();
         showToast('Prompt konnte nicht automatisch kopiert werden.', 'warning');
       }

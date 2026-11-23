@@ -16,6 +16,12 @@ import {
   IncomingSharePayload,
   subscribeToIncomingMealShares,
 } from './services/mealShareReceiver';
+import {
+  initNativeSafeAreaInsets,
+  isNativeAndroid,
+  minimizeNativeApp,
+  subscribeToNativeBackButton,
+} from './services/androidBridge';
 import { MealCategory, MealEntry, PrimaryTab } from './types/health';
 
 const RecoveryScreen = lazy(() =>
@@ -87,6 +93,9 @@ export default function App() {
     journalEntries,
     selectedWorkoutId,
     setSelectedWorkoutId,
+    aiPrivacy,
+    connectedSources,
+    syncHealthConnect,
   } = useHealthStore(
     useShallow((s) => ({
       initialized: s.initialized,
@@ -109,6 +118,9 @@ export default function App() {
       journalEntries: s.journalEntries,
       selectedWorkoutId: s.selectedWorkoutId,
       setSelectedWorkoutId: s.setSelectedWorkoutId,
+      aiPrivacy: s.aiPrivacy,
+      connectedSources: s.connectedSources,
+      syncHealthConnect: s.syncHealthConnect,
     }))
   );
 
@@ -122,6 +134,7 @@ export default function App() {
   const [editingMeal, setEditingMeal] = useState<MealEntry | null>(null);
   const [pendingSharePayload, setPendingSharePayload] = useState<IncomingSharePayload | null>(null);
   const autostartConsumedRef = useRef(false);
+  const lastAutoSyncMsRef = useRef(0);
 
   // Direction-aware transition tracking (left/right between tabs, push/pop for detail views)
   const TAB_ORDER: PrimaryTab[] = ['today', 'activity', 'sleep', 'nutrition', 'more'];
@@ -142,17 +155,34 @@ export default function App() {
   useThemeEffect(theme);
 
   useEffect(() => {
+    const cleanupInsets = initNativeSafeAreaInsets();
     initialize();
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get('tab') as PrimaryTab | null;
     if (tabParam && ['today', 'activity', 'sleep', 'nutrition', 'more'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
+    return cleanupInsets;
   }, [initialize, setActiveTab]);
 
-  // Keep todayKey fresh across midnight & when returning to the PWA tab
+  // Keep todayKey fresh across midnight & auto-sync Android Health Connect on resume
   useEffect(() => {
-    const checkDate = () => syncTodayRollover();
+    const maybeAutoSyncHealthConnect = () => {
+      if (!isNativeAndroid() || !aiPrivacy.backgroundSync) return;
+      const hcConnected = connectedSources.some(
+        (s) => s.providerId === 'health_connect' && s.connected
+      );
+      if (!hcConnected) return;
+      const now = Date.now();
+      if (now - lastAutoSyncMsRef.current < 10 * 60 * 1000) return;
+      lastAutoSyncMsRef.current = now;
+      syncHealthConnect({ silent: true, daysBack: 14 }).catch(() => {});
+    };
+
+    const checkDate = () => {
+      syncTodayRollover();
+      maybeAutoSyncHealthConnect();
+    };
     const onVisibility = () => {
       if (document.visibilityState === 'visible') checkDate();
     };
@@ -183,15 +213,75 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibility);
       if (midnightTimer !== undefined) window.clearTimeout(midnightTimer);
     };
-  }, [syncTodayRollover]);
+  }, [syncTodayRollover, aiPrivacy.backgroundSync, connectedSources, syncHealthConnect]);
 
-  // Listen for Android Share-Intents (/share-meal?text=...) & Deep-Links (caltrack://log?...)
-  // on both cold start and while app is already running
+  // Listen for Android Share-Intents (ACTION_SEND / /share-meal), Deep-Links (caltrack:// / kadenz://),
+  // and native Launcher App Shortcuts on both cold start and while app is already running
   useEffect(() => {
-    return subscribeToIncomingMealShares((payload) => {
-      setPendingSharePayload(payload);
+    return subscribeToIncomingMealShares(
+      (payload) => {
+        setPendingSharePayload(payload);
+      },
+      (shortcutTab) => {
+        if (['today', 'activity', 'sleep', 'nutrition', 'more'].includes(shortcutTab)) {
+          setActiveTab(shortcutTab as PrimaryTab);
+        }
+      }
+    );
+  }, [setActiveTab]);
+
+  // Native Android Hardware / Gesture Back button handler
+  useEffect(() => {
+    return subscribeToNativeBackButton(() => {
+      if (explainTopic) {
+        setExplainTopic(null);
+        return;
+      }
+      if (mealModalOpen) {
+        setMealModalOpen(false);
+        setEditingMeal(null);
+        setPendingSharePayload(null);
+        return;
+      }
+      if (selectedWorkoutId) {
+        setSelectedWorkoutId(null);
+        return;
+      }
+      if (journalOpen) {
+        setJournalOpen(false);
+        return;
+      }
+      if (settingsOpen) {
+        setSettingsOpen(false);
+        return;
+      }
+      if (breathworkOpen) {
+        setBreathworkOpen(false);
+        return;
+      }
+      if (detailView !== 'none') {
+        setDetailView('none');
+        return;
+      }
+      if (activeTab !== 'today') {
+        setActiveTab('today');
+        return;
+      }
+      minimizeNativeApp();
     });
-  }, []);
+  }, [
+    explainTopic,
+    mealModalOpen,
+    selectedWorkoutId,
+    setSelectedWorkoutId,
+    journalOpen,
+    settingsOpen,
+    breathworkOpen,
+    detailView,
+    setDetailView,
+    activeTab,
+    setActiveTab,
+  ]);
 
   // Optional testability hook (?autostart=1) to bypass first-launch onboarding in automated checks
   useEffect(() => {

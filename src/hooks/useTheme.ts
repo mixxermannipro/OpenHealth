@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { ThemePreference } from '../types/health';
+import { syncNativeSystemBars } from '../services/androidBridge';
 
 export function useThemeEffect(theme: ThemePreference) {
   useEffect(() => {
@@ -13,10 +14,12 @@ export function useThemeEffect(theme: ThemePreference) {
       } else {
         root.classList.remove('dark');
       }
+      const bgColor = isDark ? '#090A0C' : '#F2F2F7';
       const metaTheme = document.querySelector('meta[name="theme-color"]');
       if (metaTheme) {
-        metaTheme.setAttribute('content', isDark ? '#0D0F12' : '#F6F6F3');
+        metaTheme.setAttribute('content', bgColor);
       }
+      syncNativeSystemBars(isDark, bgColor);
     };
 
     apply();
