@@ -119,6 +119,8 @@ interface RawHealthConnectSyncResponse {
     distanceKm?: number;
     elevationGainM?: number;
     cadenceSpm?: number;
+    avgPowerWatts?: number;
+    avgPaceSecPerKm?: number;
     avgHrBpm?: number;
     maxHrBpm?: number;
     caloriesKcal?: number;
@@ -134,10 +136,18 @@ interface RawHealthConnectSyncResponse {
     activeMinutes: number;
     estimatedEnergyKcal: number;
     activeCaloriesKcal?: number;
+    floorsClimbed?: number;
+    wheelchairPushes?: number;
     vo2MaxEstimate?: number;
     spo2Percent?: number;
     respiratoryRateBpm?: number;
     skinTempDeviationC?: number;
+    bodyTempC?: number;
+    bloodPressureSystolic?: number;
+    bloodPressureDiastolic?: number;
+    bloodGlucoseMgDl?: number;
+    bmrKcal?: number;
+    mindfulnessMinutes?: number;
   }[];
   bodyMeasurements: {
     id: string;
@@ -148,6 +158,10 @@ interface RawHealthConnectSyncResponse {
     weightKg: number;
     bodyFatPercent?: number;
     muscleMassKg?: number;
+    boneMassKg?: number;
+    bodyWaterKg?: number;
+    heightCm?: number;
+    bmrKcal?: number;
   }[];
   hydrationEntries: {
     date: string;
@@ -728,10 +742,12 @@ function mapRawHealthConnectSnapshot(
       distanceKm: w.distanceKm,
       elevationGainM: w.elevationGainM,
       cadenceSpm: w.cadenceSpm,
+      avgPowerWatts: w.avgPowerWatts,
       avgPaceSecPerKm:
-        w.distanceKm && w.distanceKm > 0.2
+        w.avgPaceSecPerKm ??
+        (w.distanceKm && w.distanceKm > 0.2
           ? Math.round((w.durationMinutes * 60) / w.distanceKm)
-          : undefined,
+          : undefined),
       avgHrBpm: w.avgHrBpm,
       maxHrBpm: w.maxHrBpm,
       caloriesKcal: w.caloriesKcal,
@@ -755,10 +771,18 @@ function mapRawHealthConnectSnapshot(
     activeMinutes: a.activeMinutes,
     estimatedEnergyKcal: a.estimatedEnergyKcal,
     activeCaloriesKcal: a.activeCaloriesKcal,
+    floorsClimbed: a.floorsClimbed,
+    wheelchairPushes: a.wheelchairPushes,
     vo2MaxEstimate: a.vo2MaxEstimate,
     spo2Percent: a.spo2Percent,
     respiratoryRateBpm: a.respiratoryRateBpm,
     skinTempDeviationC: a.skinTempDeviationC,
+    bodyTempC: a.bodyTempC,
+    bloodPressureSystolic: a.bloodPressureSystolic,
+    bloodPressureDiastolic: a.bloodPressureDiastolic,
+    bloodGlucoseMgDl: a.bloodGlucoseMgDl,
+    bmrKcal: a.bmrKcal,
+    mindfulnessMinutes: a.mindfulnessMinutes,
   }));
 
   const bodyMeasurements: BodyMeasurement[] = (raw.bodyMeasurements ?? []).map((b) => ({
@@ -773,6 +797,10 @@ function mapRawHealthConnectSnapshot(
     weightKg: b.weightKg,
     bodyFatPercent: b.bodyFatPercent,
     muscleMassKg: b.muscleMassKg,
+    boneMassKg: b.boneMassKg,
+    bodyWaterKg: b.bodyWaterKg,
+    heightCm: b.heightCm,
+    bmrKcal: b.bmrKcal,
   }));
 
   const hydrationEntries: HydrationEntry[] = (raw.hydrationEntries ?? []).map((h) => ({

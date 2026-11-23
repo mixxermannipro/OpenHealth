@@ -88,20 +88,23 @@ class HealthConnectPlugin : Plugin() {
     private fun buildPermissionPayload(granted: Set<String>): JSObject {
         val grantedArray = JSArray()
         granted.forEach { grantedArray.put(it) }
-        val readGrantedCount = readPermissions.count { granted.contains(it) }
-        val writeGrantedCount = writePermissions.count { granted.contains(it) }
 
         var bgSupported = false
         var historySupported = false
+        var activeReadPerms = readPermissions
         if (getSdkAvailability() == HealthConnectClient.SDK_AVAILABLE) {
             try {
                 val client = HealthConnectClient.getOrCreate(context)
+                activeReadPerms = HealthConnectSyncEngine.getSupportedReadPermissions(client)
                 bgSupported = isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
                 historySupported = isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY)
             } catch (_: Exception) {
                 // ignore
             }
         }
+
+        val readGrantedCount = activeReadPerms.count { granted.contains(it) }
+        val writeGrantedCount = writePermissions.count { granted.contains(it) }
 
         val bgGranted = granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
         val historyGranted = granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
@@ -112,10 +115,10 @@ class HealthConnectPlugin : Plugin() {
             put("grantedCount", granted.size)
             put("readGrantedCount", readGrantedCount)
             put("writeGrantedCount", writeGrantedCount)
-            put("totalCount", readPermissions.size + writePermissions.size)
+            put("totalCount", activeReadPerms.size + writePermissions.size)
             put("hasReadAccess", readGrantedCount > 0)
             put("hasWriteAccess", writeGrantedCount > 0)
-            put("allGranted", granted.containsAll(readPermissions))
+            put("allGranted", granted.containsAll(activeReadPerms))
             put("backgroundReadSupported", bgSupported)
             put("backgroundReadGranted", bgGranted)
             put("historyReadSupported", historySupported)
@@ -186,7 +189,7 @@ class HealthConnectPlugin : Plugin() {
             try {
                 val client = HealthConnectClient.getOrCreate(context)
                 val requested = mutableSetOf<String>()
-                requested.addAll(readPermissions)
+                requested.addAll(HealthConnectSyncEngine.getSupportedReadPermissions(client))
                 if (includeWrite) requested.addAll(writePermissions)
                 if (includeBackground && isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)) {
                     requested.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)

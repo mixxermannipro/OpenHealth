@@ -118,12 +118,12 @@ jobs:
           - **Neues modernes App-Icon**: Obsidian-Liquid-Glass-Design mit leuchtendem Vitalitäts-Ring, adaptivem Android-Icon und nativem **Android 13+ Material You Monochrome Themed Icon**.
           - **Dauerhafte 15-Minuten-Hintergrund-Synchronisation**: Echter nativer Android-\`WorkManager\`-Sync (\`READ_HEALTH_DATA_IN_BACKGROUND\`), 90-Tage-Verlauf (\`READ_HEALTH_DATA_HISTORY\`), automatischer Neustart nach Smartphone-Reboot & App-Update (\`BootCompletedReceiver\`) sowie 1-Tap-Freigabe gegen Android Doze/Akku-Drosselung.
           - **COROS-Uhr & Sportuhren (100 % kostenlos & lokal)**: Direkter COROS-Einrichtungsassistent (1-Tap *COROS App öffnen* → Health Connect), automatische Nacht-Ruhepuls-Ableitung aus der Herzfrequenz-Zeitreihe sowie nativer binärer **\`.FIT\`-, \`.GPX\`- und \`.TCX\`-Import** direkt aus der COROS-App.
-          - **Vollständige Gesundheitsdaten über Android Health Connect (Jetpack \`connect-client:1.1.0\`)**:
-            - **Schlaf & Schlafphasen** (Wach, Leicht, Tief, REM inkl. automatischer Zusammenführung geteilter Nächte)
-            - **Erholung & Herz**: HRV (RMSSD), Ruhepuls (gemessen + nächtliche 10.-Perzentil-Ableitung), kontinuierliche Trainings-Herzfrequenz-Zeitreihen
-            - **Trainings & Aktivität**: Sessions inkl. Distanz, Höhenmeter (\`ElevationGained\`), Schrittfrequenz/Kadenz (\`StepsCadence\`), Schritte, aktive & gesamte Kalorien
-            - **Vitalwerte & Körper**: VO₂max, Blutsauerstoff (SpO₂), Atemfrequenz, Haut- & Basaltemperatur, Gewicht, Körperfett, Muskelmasse (\`LeanBodyMass\`)
-            - **Ernährung & Flüssigkeit**: Wasseraufnahme (\`Hydration\`) & externe Mahlzeiten (\`Nutrition\` ohne Selbst-Duplikate) + optionaler Schreib-Abgleich zurück an Health Connect
+          - **100 % vollständige Android Health Connect Abdeckung (alle 40 Datentypen aus Jetpack \`connect-client:1.1.0\`)**:
+            - **Schlaf & Achtsamkeit**: Schlafphasen (Wach, Leicht, Tief, REM inkl. automatischer Zusammenführung geteilter Nächte) & Achtsamkeits-Sessions (\`MindfulnessSession\`)
+            - **Herz & Vitalwerte**: HRV (RMSSD), Ruhepuls (+ automatische nächtliche 10.-Perzentil-Ableitung), kontinuierliche Herzfrequenz-Zeitreihen, Blutdruck (\`BloodPressure\`), Blutzucker (\`BloodGlucose\`), Blutsauerstoff (SpO₂), Atemfrequenz, Haut-, Basal- & Körpertemperatur
+            - **Trainings & Aktivität**: Trainings & geplante Trainings inkl. Distanz, Höhenmeter, Stockwerke (\`FloorsClimbed\`), Geschwindigkeit/Pace (\`Speed\`), Watt-Leistung (\`Power\`), Schritt- & Trittfrequenz (\`StepsCadence\` / \`CyclingPedalingCadence\`), Schritte, Rollstuhl-Schübe, aktive & gesamte Kalorien, VO₂max
+            - **Körperwerte**: Gewicht, Körpergröße (\`Height\`), Körperfett, Muskel-/Magermasse (\`LeanBodyMass\`), Knochenmasse (\`BoneMass\`), Körperwasser (\`BodyWaterMass\`) & Grundumsatz (\`BasalMetabolicRate\`)
+            - **Ernährung, Flüssigkeit & Zyklus**: Wasseraufnahme (\`Hydration\`), externe Mahlzeiten (\`Nutrition\` ohne Selbst-Duplikate), Zyklus-Daten (\`Menstruation\`, \`Ovulation\`, \`CervicalMucus\`, \`IntermenstrualBleeding\`, \`SexualActivity\`) + optionaler Schreib-Abgleich zurück an Health Connect
           - **System-Komfort**: Android Share-Target (\`ACTION_SEND\`) & Deep-Links (\`caltrack://\`, \`kadenz://\`), Offline-Barcode-Scanner (\`BarcodeDetector\` + \`@zxing/browser\`), Launcher App-Shortcuts, native Haptik, \`FileProvider\` JSON-Backup, Edge-to-Edge \`WindowInsets\` & Hardware-Zurück-Navigation.
 
           ## 🔐 Integrität & Signatur

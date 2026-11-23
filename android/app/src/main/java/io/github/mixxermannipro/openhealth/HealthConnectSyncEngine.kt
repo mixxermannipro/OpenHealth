@@ -1,31 +1,55 @@
+@file:OptIn(ExperimentalMindfulnessSessionApi::class)
+
 package io.github.mixxermannipro.openhealth
 
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
+import androidx.health.connect.client.feature.ExperimentalMindfulnessSessionApi
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.BasalBodyTemperatureRecord
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
+import androidx.health.connect.client.records.BloodGlucoseRecord
+import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.BodyTemperatureRecord
+import androidx.health.connect.client.records.BodyWaterMassRecord
+import androidx.health.connect.client.records.BoneMassRecord
+import androidx.health.connect.client.records.CervicalMucusRecord
+import androidx.health.connect.client.records.CyclingPedalingCadenceRecord
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.HeightRecord
 import androidx.health.connect.client.records.HydrationRecord
+import androidx.health.connect.client.records.IntermenstrualBleedingRecord
 import androidx.health.connect.client.records.LeanBodyMassRecord
 import androidx.health.connect.client.records.MealType
+import androidx.health.connect.client.records.MenstruationFlowRecord
+import androidx.health.connect.client.records.MenstruationPeriodRecord
+import androidx.health.connect.client.records.MindfulnessSessionRecord
 import androidx.health.connect.client.records.NutritionRecord
+import androidx.health.connect.client.records.OvulationTestRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
+import androidx.health.connect.client.records.PlannedExerciseSessionRecord
+import androidx.health.connect.client.records.PowerRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
+import androidx.health.connect.client.records.SexualActivityRecord
 import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.SpeedRecord
 import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.Vo2MaxRecord
 import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.records.WheelchairPushesRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import org.json.JSONArray
@@ -42,6 +66,7 @@ import kotlin.reflect.KClass
 /**
  * Shared local-first Health Connect sync engine used identically by both
  * foreground HealthConnectPlugin and background 15-minute HealthSyncWorker.
+ * Covers ALL standard Android Health Connect 1.1.0 record types.
  */
 object HealthConnectSyncEngine {
 
@@ -52,28 +77,59 @@ object HealthConnectSyncEngine {
     private const val KEY_LAST_BG_SYNC_STATUS = "last_bg_sync_status"
     private const val KEY_LAST_BG_SYNC_RECORDS = "last_bg_sync_records"
 
-    val readRecordPermissions: Set<String> = setOf(
+    /** Always-available Health Connect read permissions across all Android 8–16 devices. */
+    val coreReadRecordPermissions: Set<String> = setOf(
+        // Activity & Fitness
         HealthPermission.getReadPermission(StepsRecord::class),
         HealthPermission.getReadPermission(StepsCadenceRecord::class),
+        HealthPermission.getReadPermission(DistanceRecord::class),
+        HealthPermission.getReadPermission(ElevationGainedRecord::class),
+        HealthPermission.getReadPermission(FloorsClimbedRecord::class),
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(ExerciseSessionRecord::class),
+        HealthPermission.getReadPermission(CyclingPedalingCadenceRecord::class),
+        HealthPermission.getReadPermission(PowerRecord::class),
+        HealthPermission.getReadPermission(SpeedRecord::class),
+        HealthPermission.getReadPermission(Vo2MaxRecord::class),
+        HealthPermission.getReadPermission(WheelchairPushesRecord::class),
+        // Sleep
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        // Heart & Vitals
         HealthPermission.getReadPermission(HeartRateRecord::class),
         HealthPermission.getReadPermission(RestingHeartRateRecord::class),
         HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
-        HealthPermission.getReadPermission(SleepSessionRecord::class),
-        HealthPermission.getReadPermission(ExerciseSessionRecord::class),
-        HealthPermission.getReadPermission(DistanceRecord::class),
-        HealthPermission.getReadPermission(ElevationGainedRecord::class),
-        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(WeightRecord::class),
-        HealthPermission.getReadPermission(BodyFatRecord::class),
-        HealthPermission.getReadPermission(LeanBodyMassRecord::class),
-        HealthPermission.getReadPermission(Vo2MaxRecord::class),
         HealthPermission.getReadPermission(OxygenSaturationRecord::class),
         HealthPermission.getReadPermission(RespiratoryRateRecord::class),
-        HealthPermission.getReadPermission(SkinTemperatureRecord::class),
         HealthPermission.getReadPermission(BasalBodyTemperatureRecord::class),
+        HealthPermission.getReadPermission(BodyTemperatureRecord::class),
+        HealthPermission.getReadPermission(BloodPressureRecord::class),
+        HealthPermission.getReadPermission(BloodGlucoseRecord::class),
+        // Body Measurements
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getReadPermission(HeightRecord::class),
+        HealthPermission.getReadPermission(BodyFatRecord::class),
+        HealthPermission.getReadPermission(LeanBodyMassRecord::class),
+        HealthPermission.getReadPermission(BoneMassRecord::class),
+        HealthPermission.getReadPermission(BodyWaterMassRecord::class),
+        HealthPermission.getReadPermission(BasalMetabolicRateRecord::class),
+        // Nutrition & Hydration
         HealthPermission.getReadPermission(HydrationRecord::class),
-        HealthPermission.getReadPermission(NutritionRecord::class)
+        HealthPermission.getReadPermission(NutritionRecord::class),
+        // Cycle Tracking
+        HealthPermission.getReadPermission(MenstruationFlowRecord::class),
+        HealthPermission.getReadPermission(MenstruationPeriodRecord::class),
+        HealthPermission.getReadPermission(OvulationTestRecord::class),
+        HealthPermission.getReadPermission(CervicalMucusRecord::class),
+        HealthPermission.getReadPermission(IntermenstrualBleedingRecord::class),
+        HealthPermission.getReadPermission(SexualActivityRecord::class)
+    )
+
+    /** Full union including feature-gated Health Connect 1.1.0 record permissions. */
+    val readRecordPermissions: Set<String> = coreReadRecordPermissions + setOf(
+        HealthPermission.getReadPermission(SkinTemperatureRecord::class),
+        HealthPermission.getReadPermission(PlannedExerciseSessionRecord::class),
+        HealthPermission.getReadPermission(MindfulnessSessionRecord::class)
     )
 
     val writeRecordPermissions: Set<String> = setOf(
@@ -81,6 +137,30 @@ object HealthConnectSyncEngine {
         HealthPermission.getWritePermission(HydrationRecord::class),
         HealthPermission.getWritePermission(NutritionRecord::class)
     )
+
+    /**
+     * Returns ALL Health Connect read permissions supported by the installed Health Connect
+     * provider on this device, safely gating newer Android 14/15/16 features so the
+     * permission prompt never fails on older Health Connect versions.
+     */
+    fun getSupportedReadPermissions(client: HealthConnectClient): Set<String> {
+        val supported = coreReadRecordPermissions.toMutableSet()
+        fun hasFeature(feature: Int): Boolean = try {
+            client.features.getFeatureStatus(feature) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+        } catch (_: Exception) {
+            false
+        }
+        if (hasFeature(HealthConnectFeatures.FEATURE_SKIN_TEMPERATURE)) {
+            supported.add(HealthPermission.getReadPermission(SkinTemperatureRecord::class))
+        }
+        if (hasFeature(HealthConnectFeatures.FEATURE_PLANNED_EXERCISE)) {
+            supported.add(HealthPermission.getReadPermission(PlannedExerciseSessionRecord::class))
+        }
+        if (hasFeature(HealthConnectFeatures.FEATURE_MINDFULNESS_SESSION)) {
+            supported.add(HealthPermission.getReadPermission(MindfulnessSessionRecord::class))
+        }
+        return supported
+    }
 
     fun isBackgroundSyncEnabled(context: Context): Boolean {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -184,27 +264,58 @@ object HealthConnectSyncEngine {
             }
         }
 
+        // Activity & Fitness
         val stepsRecords = safeRead(StepsRecord::class)
         val cadenceRecords = safeRead(StepsCadenceRecord::class)
-        val activeCalRecords = safeRead(ActiveCaloriesBurnedRecord::class)
-        val totalCalRecords = safeRead(TotalCaloriesBurnedRecord::class)
-        val sleepRecords = safeRead(SleepSessionRecord::class)
-        val hrvRecords = safeRead(HeartRateVariabilityRmssdRecord::class)
-        val rhrRecords = safeRead(RestingHeartRateRecord::class)
-        val exerciseRecords = safeRead(ExerciseSessionRecord::class)
-        val hrRecords = safeRead(HeartRateRecord::class)
         val distanceRecords = safeRead(DistanceRecord::class)
         val elevationRecords = safeRead(ElevationGainedRecord::class)
-        val weightRecords = safeRead(WeightRecord::class)
-        val bodyFatRecords = safeRead(BodyFatRecord::class)
-        val leanMassRecords = safeRead(LeanBodyMassRecord::class)
+        val floorsRecords = safeRead(FloorsClimbedRecord::class)
+        val activeCalRecords = safeRead(ActiveCaloriesBurnedRecord::class)
+        val totalCalRecords = safeRead(TotalCaloriesBurnedRecord::class)
+        val exerciseRecords = safeRead(ExerciseSessionRecord::class)
+        val plannedExerciseRecords = safeRead(PlannedExerciseSessionRecord::class)
+        val cyclingCadenceRecords = safeRead(CyclingPedalingCadenceRecord::class)
+        val powerRecords = safeRead(PowerRecord::class)
+        val speedRecords = safeRead(SpeedRecord::class)
         val vo2Records = safeRead(Vo2MaxRecord::class)
+        val wheelchairRecords = safeRead(WheelchairPushesRecord::class)
+
+        // Sleep & Wellness
+        val sleepRecords = safeRead(SleepSessionRecord::class)
+        val mindfulnessRecords = safeRead(MindfulnessSessionRecord::class)
+
+        // Heart & Vitals
+        val hrRecords = safeRead(HeartRateRecord::class)
+        val rhrRecords = safeRead(RestingHeartRateRecord::class)
+        val hrvRecords = safeRead(HeartRateVariabilityRmssdRecord::class)
         val spo2Records = safeRead(OxygenSaturationRecord::class)
         val respRecords = safeRead(RespiratoryRateRecord::class)
         val skinTempRecords = safeRead(SkinTemperatureRecord::class)
         val basalTempRecords = safeRead(BasalBodyTemperatureRecord::class)
+        val bodyTempRecords = safeRead(BodyTemperatureRecord::class)
+        val bloodPressureRecords = safeRead(BloodPressureRecord::class)
+        val bloodGlucoseRecords = safeRead(BloodGlucoseRecord::class)
+
+        // Body Measurements
+        val weightRecords = safeRead(WeightRecord::class)
+        val heightRecords = safeRead(HeightRecord::class)
+        val bodyFatRecords = safeRead(BodyFatRecord::class)
+        val leanMassRecords = safeRead(LeanBodyMassRecord::class)
+        val boneMassRecords = safeRead(BoneMassRecord::class)
+        val bodyWaterRecords = safeRead(BodyWaterMassRecord::class)
+        val bmrRecords = safeRead(BasalMetabolicRateRecord::class)
+
+        // Nutrition & Hydration
         val hydrationRecords = safeRead(HydrationRecord::class)
         val nutritionRecords = safeRead(NutritionRecord::class)
+
+        // Cycle Tracking
+        val menstruationFlowRecords = safeRead(MenstruationFlowRecord::class)
+        val menstruationPeriodRecords = safeRead(MenstruationPeriodRecord::class)
+        val ovulationRecords = safeRead(OvulationTestRecord::class)
+        val cervicalMucusRecords = safeRead(CervicalMucusRecord::class)
+        val intermenstrualRecords = safeRead(IntermenstrualBleedingRecord::class)
+        val sexualActivityRecords = safeRead(SexualActivityRecord::class)
 
         // ------------------------------------------------------------------
         // 1. Sleep Sessions (merge split night segments + prefer main sleep)
@@ -373,7 +484,33 @@ object HealthConnectSyncEngine {
                 .flatMap { it.samples }
                 .filter { it.time >= ex.startTime && it.time <= ex.endTime && it.rate in 40.0..260.0 }
                 .map { it.rate }
-            val avgCadence = if (cadenceSamples.isNotEmpty()) cadenceSamples.average().roundToInt() else null
+            val cyclingCadenceSamples = cyclingCadenceRecords
+                .filter { it.endTime >= ex.startTime && it.startTime <= ex.endTime }
+                .flatMap { it.samples }
+                .filter { it.time >= ex.startTime && it.time <= ex.endTime && it.revolutionsPerMinute in 20.0..200.0 }
+                .map { it.revolutionsPerMinute }
+            val avgCadence = when {
+                cadenceSamples.isNotEmpty() -> cadenceSamples.average().roundToInt()
+                cyclingCadenceSamples.isNotEmpty() -> cyclingCadenceSamples.average().roundToInt()
+                else -> null
+            }
+
+            val powerSamples = powerRecords
+                .filter { it.endTime >= ex.startTime && it.startTime <= ex.endTime }
+                .flatMap { it.samples }
+                .filter { it.time >= ex.startTime && it.time <= ex.endTime && it.power.inWatts in 10.0..2500.0 }
+                .map { it.power.inWatts }
+            val avgPowerWatts = if (powerSamples.isNotEmpty()) powerSamples.average().roundToInt() else null
+
+            val speedSamples = speedRecords
+                .filter { it.endTime >= ex.startTime && it.startTime <= ex.endTime }
+                .flatMap { it.samples }
+                .filter { it.time >= ex.startTime && it.time <= ex.endTime && it.speed.inMetersPerSecond in 0.3..30.0 }
+                .map { it.speed.inMetersPerSecond }
+            val avgPaceSecPerKm = if (speedSamples.isNotEmpty()) {
+                val avgMps = speedSamples.average()
+                if (avgMps > 0.3) (1000.0 / avgMps).roundToInt() else null
+            } else null
 
             val kcal = activeCalRecords
                 .filter { it.endTime > ex.startTime && it.startTime < ex.endTime }
@@ -401,6 +538,8 @@ object HealthConnectSyncEngine {
                 if (distKm > 0.05) put("distanceKm", (distKm * 100.0).roundToInt() / 100.0)
                 if (elevGainM != null) put("elevationGainM", elevGainM.roundToInt())
                 if (avgCadence != null) put("cadenceSpm", avgCadence)
+                if (avgPowerWatts != null) put("avgPowerWatts", avgPowerWatts)
+                if (avgPaceSecPerKm != null) put("avgPaceSecPerKm", avgPaceSecPerKm)
                 if (avgHr != null) put("avgHrBpm", avgHr)
                 if (maxHr != null) put("maxHrBpm", maxHr)
                 if (kcal != null) put("caloriesKcal", kcal.roundToInt())
@@ -409,10 +548,13 @@ object HealthConnectSyncEngine {
         }
 
         // ------------------------------------------------------------------
-        // 5. Daily Activities & Vitals (Steps, Active/Total kcal, VO2max, SpO2, Resp, Skin Temp)
+        // 5. Daily Activities & ALL Vitals (Steps, Floors, Active/Total kcal, VO2max, SpO2,
+        //    Resp, Skin/Basal/Body Temp, Blood Pressure, Blood Glucose, BMR, Mindfulness)
         // ------------------------------------------------------------------
         val allActivityDates = mutableSetOf<String>()
         stepsRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
+        floorsRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
+        wheelchairRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
         activeCalRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
         totalCalRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
         vo2Records.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
@@ -420,6 +562,11 @@ object HealthConnectSyncEngine {
         respRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
         skinTempRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
         basalTempRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
+        bodyTempRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
+        bloodPressureRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
+        bloodGlucoseRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
+        bmrRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
+        mindfulnessRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
 
         val activityArray = JSONArray()
         for (dateKey in allActivityDates) {
@@ -429,6 +576,22 @@ object HealthConnectSyncEngine {
             val bestOriginEntry = stepsByOrigin.maxByOrNull { it.value }
             val steps = bestOriginEntry?.value?.toInt() ?: 0
             val provider = mapPackageToProvider(bestOriginEntry?.key ?: "")
+
+            val dayFloors = floorsRecords
+                .filter { toLocalDateKey(it.startTime, zone) == dateKey }
+                .groupBy { it.metadata.dataOrigin.packageName }
+                .values
+                .maxOfOrNull { list -> list.sumOf { it.floors } }
+                ?.roundToInt()
+                ?.takeIf { it > 0 }
+
+            val dayWheelchairPushes = wheelchairRecords
+                .filter { toLocalDateKey(it.startTime, zone) == dateKey }
+                .groupBy { it.metadata.dataOrigin.packageName }
+                .values
+                .maxOfOrNull { list -> list.sumOf { it.count } }
+                ?.toInt()
+                ?.takeIf { it > 0 }
 
             val dayActiveCals = activeCalRecords
                 .filter { toLocalDateKey(it.startTime, zone) == dateKey }
@@ -473,6 +636,36 @@ object HealthConnectSyncEngine {
                     ?.temperature?.inCelsius
                     ?.let { it - 36.6 }
 
+            val dayBodyTempC = bodyTempRecords
+                .filter { toLocalDateKey(it.time, zone) == dateKey }
+                .maxByOrNull { it.time }
+                ?.temperature?.inCelsius
+                ?: basalTempRecords
+                    .filter { toLocalDateKey(it.time, zone) == dateKey }
+                    .maxByOrNull { it.time }
+                    ?.temperature?.inCelsius
+
+            val latestBp = bloodPressureRecords
+                .filter { toLocalDateKey(it.time, zone) == dateKey }
+                .maxByOrNull { it.time }
+
+            val dayGlucoseMgDl = bloodGlucoseRecords
+                .filter { toLocalDateKey(it.time, zone) == dateKey }
+                .map { it.level.inMilligramsPerDeciliter }
+                .takeIf { it.isNotEmpty() }
+                ?.average()
+
+            val dayBmrKcal = bmrRecords
+                .filter { toLocalDateKey(it.time, zone) == dateKey }
+                .maxByOrNull { it.time }
+                ?.basalMetabolicRate?.inKilocaloriesPerDay
+                ?.roundToInt()
+
+            val dayMindfulnessMin = mindfulnessRecords
+                .filter { toLocalDateKey(it.startTime, zone) == dateKey }
+                .sumOf { max(1L, (it.endTime.toEpochMilli() - it.startTime.toEpochMilli()) / 60000L).toInt() }
+                .takeIf { it > 0 }
+
             val dayExerciseMinutes = exerciseRecords
                 .filter { toLocalDateKey(it.startTime, zone) == dateKey }
                 .sumOf { max(1L, (it.endTime.toEpochMilli() - it.startTime.toEpochMilli()) / 60000L).toInt() }
@@ -486,28 +679,51 @@ object HealthConnectSyncEngine {
                 put("sourceRecordId", "hc_act_${dateKey}")
                 put("steps", steps)
                 put("activeMinutes", activeMinutes)
-                put("estimatedEnergyKcal", dayTotalCals ?: ((dayActiveCals ?: 0) + 1750))
+                put("estimatedEnergyKcal", dayTotalCals ?: ((dayActiveCals ?: 0) + (dayBmrKcal ?: 1750)))
                 if (dayActiveCals != null) put("activeCaloriesKcal", dayActiveCals)
+                if (dayFloors != null) put("floorsClimbed", dayFloors)
+                if (dayWheelchairPushes != null) put("wheelchairPushes", dayWheelchairPushes)
                 if (dayVo2 != null) put("vo2MaxEstimate", (dayVo2 * 10.0).roundToInt() / 10.0)
                 if (daySpo2 != null) put("spo2Percent", (daySpo2 * 10.0).roundToInt() / 10.0)
                 if (dayResp != null) put("respiratoryRateBpm", (dayResp * 10.0).roundToInt() / 10.0)
                 if (skinDeltaC != null) put("skinTempDeviationC", (skinDeltaC * 100.0).roundToInt() / 100.0)
+                if (dayBodyTempC != null) put("bodyTempC", (dayBodyTempC * 10.0).roundToInt() / 10.0)
+                if (latestBp != null) {
+                    put("bloodPressureSystolic", latestBp.systolic.inMillimetersOfMercury.roundToInt())
+                    put("bloodPressureDiastolic", latestBp.diastolic.inMillimetersOfMercury.roundToInt())
+                }
+                if (dayGlucoseMgDl != null) put("bloodGlucoseMgDl", dayGlucoseMgDl.roundToInt())
+                if (dayBmrKcal != null) put("bmrKcal", dayBmrKcal)
+                if (dayMindfulnessMin != null) put("mindfulnessMinutes", dayMindfulnessMin)
             })
         }
 
         // ------------------------------------------------------------------
-        // 6. Body Measurements (Weight, Body Fat %, Lean Body / Muscle Mass)
+        // 6. Body Measurements (Weight, Height, Body Fat %, Lean/Muscle Mass,
+        //    Bone Mass, Body Water Mass, BMR)
         // ------------------------------------------------------------------
+        val latestHeightCm = heightRecords
+            .maxByOrNull { it.time }
+            ?.height?.inMeters
+            ?.let { (it * 100.0).roundToInt() }
+            ?.takeIf { it in 80..250 }
+
         val bodyDates = (
             weightRecords.map { toLocalDateKey(it.time, zone) } +
                 bodyFatRecords.map { toLocalDateKey(it.time, zone) } +
-                leanMassRecords.map { toLocalDateKey(it.time, zone) }
+                leanMassRecords.map { toLocalDateKey(it.time, zone) } +
+                boneMassRecords.map { toLocalDateKey(it.time, zone) } +
+                bodyWaterRecords.map { toLocalDateKey(it.time, zone) }
             ).toSet()
         val bodyArray = JSONArray()
         for (dateKey in bodyDates) {
             val w = weightRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
             val bf = bodyFatRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
             val lm = leanMassRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
+            val bm = boneMassRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
+            val bw = bodyWaterRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
+            val ht = heightRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
+            val bmr = bmrRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
             if (w == null) continue
             val provider = mapPackageToProvider(w.metadata.dataOrigin.packageName)
             bodyArray.put(JSONObject().apply {
@@ -519,6 +735,10 @@ object HealthConnectSyncEngine {
                 put("weightKg", (w.weight.inKilograms * 10.0).roundToInt() / 10.0)
                 if (bf != null) put("bodyFatPercent", (bf.percentage.value * 10.0).roundToInt() / 10.0)
                 if (lm != null) put("muscleMassKg", (lm.mass.inKilograms * 10.0).roundToInt() / 10.0)
+                if (bm != null) put("boneMassKg", (bm.mass.inKilograms * 10.0).roundToInt() / 10.0)
+                if (bw != null) put("bodyWaterKg", (bw.mass.inKilograms * 10.0).roundToInt() / 10.0)
+                if (ht != null) put("heightCm", (ht.height.inMeters * 100.0).roundToInt())
+                if (bmr != null) put("bmrKcal", bmr.basalMetabolicRate.inKilocaloriesPerDay.roundToInt())
             })
         }
 
@@ -570,10 +790,41 @@ object HealthConnectSyncEngine {
             })
         }
 
+        // Record count telemetry across all 40 Health Connect record types
+        val cycleRecordCount = menstruationFlowRecords.size +
+            menstruationPeriodRecords.size +
+            ovulationRecords.size +
+            cervicalMucusRecords.size +
+            intermenstrualRecords.size +
+            sexualActivityRecords.size
+
+        val recordCounts = JSONObject().apply {
+            put("sleep", sleepRecords.size)
+            put("hrv", hrvRecords.size)
+            put("rhr", rhrRecords.size)
+            put("heartRate", hrRecords.size)
+            put("workouts", exerciseRecords.size)
+            put("plannedWorkouts", plannedExerciseRecords.size)
+            put("steps", stepsRecords.size)
+            put("floors", floorsRecords.size)
+            put("power", powerRecords.size)
+            put("speed", speedRecords.size)
+            put("bloodPressure", bloodPressureRecords.size)
+            put("bloodGlucose", bloodGlucoseRecords.size)
+            put("bodyTemp", bodyTempRecords.size + skinTempRecords.size + basalTempRecords.size)
+            put("mindfulness", mindfulnessRecords.size)
+            put("cycle", cycleRecordCount)
+            put("body", weightRecords.size + bodyFatRecords.size + leanMassRecords.size + boneMassRecords.size + bodyWaterRecords.size)
+            put("nutrition", nutritionRecords.size)
+            put("hydration", hydrationRecords.size)
+        }
+
         return JSONObject().apply {
             put("syncedAt", now.toString())
             put("daysSynced", effectiveDays)
             put("grantedCount", granted.size)
+            if (latestHeightCm != null) put("latestHeightCm", latestHeightCm)
+            put("recordCounts", recordCounts)
             put("hrvObservations", hrvArray)
             put("rhrObservations", rhrArray)
             put("sleepSessions", sleepArray)

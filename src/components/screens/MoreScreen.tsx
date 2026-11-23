@@ -508,6 +508,14 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
 
                 <div className="space-y-1.5 text-[12px] text-[var(--text-secondary)]">
                   <p>
+                    • Health-Connect-Datentypen:{' '}
+                    <strong className="text-[var(--text-primary)]">
+                      {healthConnectPermissions?.allGranted
+                        ? `Alle aktiv (${healthConnectPermissions.grantedCount}/${healthConnectPermissions.totalCount}) ✓`
+                        : `${healthConnectPermissions?.grantedCount ?? 0} von ${healthConnectPermissions?.totalCount ?? 0} freigegeben`}
+                    </strong>
+                  </p>
+                  <p>
                     • Hintergrund-Leserecht (alle 15 Min.):{' '}
                     <strong className="text-[var(--text-primary)]">
                       {healthConnectPermissions?.backgroundReadGranted ? 'Aktiv ✓' : 'Fehlt noch'}
@@ -537,6 +545,16 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                 </div>
 
                 <div className="flex flex-col gap-2 pt-1">
+                  {!healthConnectPermissions?.allGranted && (
+                    <button
+                      type="button"
+                      onClick={() => connectHealthConnect()}
+                      className="w-full min-h-[40px] rounded-full bg-[var(--accent-recovery)] text-black text-xs font-semibold px-4 hover:opacity-90"
+                    >
+                      Alle Health-Connect-Daten freigeben
+                    </button>
+                  )}
+
                   {healthConnectPermissions?.backgroundReadSupported &&
                     !healthConnectPermissions?.backgroundReadGranted && (
                       <button

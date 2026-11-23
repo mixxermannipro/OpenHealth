@@ -314,6 +314,7 @@ export interface WorkoutSession extends ObservationBase {
   avgHrBpm?: number;
   maxHrBpm?: number;
   cadenceSpm?: number;
+  avgPowerWatts?: number;
   elevationGainM?: number;
   rpe?: number; // 1-10
   caloriesKcal?: number;
@@ -335,10 +336,18 @@ export interface DailyActivitySummary extends ObservationBase {
   sedentaryMinutes?: number;
   estimatedEnergyKcal: number;
   activeCaloriesKcal?: number;
+  floorsClimbed?: number;
+  wheelchairPushes?: number;
   vo2MaxEstimate?: number;
   respiratoryRateBpm?: number;
   spo2Percent?: number;
   skinTempDeviationC?: number;
+  bodyTempC?: number;
+  bloodPressureSystolic?: number;
+  bloodPressureDiastolic?: number;
+  bloodGlucoseMgDl?: number;
+  bmrKcal?: number;
+  mindfulnessMinutes?: number;
 }
 
 export interface BodyMeasurement extends ObservationBase {
@@ -346,6 +355,10 @@ export interface BodyMeasurement extends ObservationBase {
   weightKg: number;
   bodyFatPercent?: number;
   muscleMassKg?: number;
+  boneMassKg?: number;
+  bodyWaterKg?: number;
+  heightCm?: number;
+  bmrKcal?: number;
 }
 
 export interface JournalEntry {
