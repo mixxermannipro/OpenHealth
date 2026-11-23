@@ -114,3 +114,131 @@ test('mergeSyncedBatch merges and deduplicates Health Connect sleep, body measur
   assert.equal(merged.hydrationEntries[0].ml, 1800);
   assert.equal(merged.report.importedObservations, 2);
 });
+
+test('mergeSyncedBatch merges external meals, skin temperature, muscle mass, and prefers measured RHR over wearable estimates', () => {
+  const todayKey = '2026-11-23';
+  const merged = mergeSyncedBatch(
+    {
+      workouts: [],
+      hrvObservations: [],
+      rhrObservations: [
+        {
+          id: 'hc_rhr_est_2026-11-23',
+          date: todayKey,
+          timestamp: '2026-11-23T06:00:00Z',
+          sourceProvider: 'health_connect',
+          sourceRecordId: 'hc_rhr_est_2026-11-23',
+          dataQuality: 'moderate',
+          provenance: 'wearable_estimate',
+          metricType: 'resting_hr',
+          unit: 'bpm',
+          value: 51,
+          recordingContext: 'overnight_min',
+        },
+      ],
+      sleepSessions: [],
+      dailyActivities: [],
+      bodyMeasurements: [],
+      hydrationEntries: [],
+      meals: [],
+    },
+    {
+      providerId: 'health_connect',
+      syncedAt: '2026-11-23T12:30:00Z',
+      workouts: [],
+      hrvObservations: [],
+      rhrObservations: [
+        {
+          id: 'hc_rhr_measured_1',
+          date: todayKey,
+          timestamp: '2026-11-23T06:30:00Z',
+          sourceProvider: 'health_connect',
+          sourceRecordId: 'hc_rhr_measured_1',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'resting_hr',
+          unit: 'bpm',
+          value: 49,
+          recordingContext: 'morning_rest',
+        },
+      ],
+      sleepSessions: [],
+      dailyActivities: [
+        {
+          id: 'hc_act_1',
+          date: todayKey,
+          timestamp: '2026-11-23T12:00:00Z',
+          sourceProvider: 'health_connect',
+          sourceRecordId: 'hc_act_1',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'daily_activity',
+          steps: 9420,
+          activeMinutes: 48,
+          activeCaloriesKcal: 520,
+          estimatedEnergyKcal: 2350,
+          skinTempDeviationC: 0.3,
+        },
+      ],
+      bodyMeasurements: [
+        {
+          id: 'hc_body_2',
+          date: todayKey,
+          timestamp: '2026-11-23T07:10:00Z',
+          sourceProvider: 'health_connect',
+          sourceRecordId: 'hc_body_2',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'body_measurement',
+          weightKg: 75.2,
+          muscleMassKg: 61.8,
+        },
+      ],
+      meals: [
+        {
+          id: 'hc_meal_1',
+          date: todayKey,
+          timestamp: '2026-11-23T08:15:00Z',
+          category: 'breakfast',
+          title: 'Haferflocken mit Beeren',
+          subtitle: 'Health Connect Import',
+          items: [
+            {
+              id: 'hc_meal_1_item',
+              name: 'Haferflocken mit Beeren',
+              grams: 300,
+              calories: 480,
+              proteinG: 24,
+              carbsG: 68,
+              fatG: 12,
+              fiberG: 9,
+              source: 'manual',
+            },
+          ],
+          totalCalories: 480,
+          proteinG: 24,
+          carbsG: 68,
+          fatG: 12,
+          fiberG: 9,
+        },
+      ],
+    },
+    {
+      steps: 'health_connect',
+      heartRate: 'health_connect',
+      sleep: 'health_connect',
+      workouts: 'health_connect',
+      weight: 'health_connect',
+      bodyComposition: 'health_connect',
+    }
+  );
+
+  assert.equal(merged.rhrObservations.length, 1);
+  assert.equal(merged.rhrObservations[0].value, 49);
+  assert.equal(merged.rhrObservations[0].provenance, 'measured');
+  assert.equal(merged.dailyActivities[0].skinTempDeviationC, 0.3);
+  assert.equal(merged.bodyMeasurements[0].muscleMassKg, 61.8);
+  assert.equal(merged.meals.length, 1);
+  assert.equal(merged.meals[0].title, 'Haferflocken mit Beeren');
+});
+

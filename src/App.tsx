@@ -96,6 +96,8 @@ export default function App() {
     aiPrivacy,
     connectedSources,
     syncHealthConnect,
+    refreshHealthConnectStatus,
+    ingestPendingBackgroundSnapshot,
   } = useHealthStore(
     useShallow((s) => ({
       initialized: s.initialized,
@@ -121,6 +123,8 @@ export default function App() {
       aiPrivacy: s.aiPrivacy,
       connectedSources: s.connectedSources,
       syncHealthConnect: s.syncHealthConnect,
+      refreshHealthConnectStatus: s.refreshHealthConnectStatus,
+      ingestPendingBackgroundSnapshot: s.ingestPendingBackgroundSnapshot,
     }))
   );
 
@@ -165,16 +169,20 @@ export default function App() {
     return cleanupInsets;
   }, [initialize, setActiveTab]);
 
-  // Keep todayKey fresh across midnight & auto-sync Android Health Connect on resume
+  // Keep todayKey fresh across midnight, ingest 15-min background Health Connect snapshots,
+  // and run a fresh foreground sync on resume
   useEffect(() => {
-    const maybeAutoSyncHealthConnect = () => {
-      if (!isNativeAndroid() || !aiPrivacy.backgroundSync) return;
+    const maybeAutoSyncHealthConnect = async () => {
+      if (!isNativeAndroid()) return;
+      await ingestPendingBackgroundSnapshot().catch(() => {});
+      await refreshHealthConnectStatus().catch(() => {});
+      if (!aiPrivacy.backgroundSync) return;
       const hcConnected = connectedSources.some(
         (s) => s.providerId === 'health_connect' && s.connected
       );
       if (!hcConnected) return;
       const now = Date.now();
-      if (now - lastAutoSyncMsRef.current < 10 * 60 * 1000) return;
+      if (now - lastAutoSyncMsRef.current < 5 * 60 * 1000) return;
       lastAutoSyncMsRef.current = now;
       syncHealthConnect({ silent: true, daysBack: 14 }).catch(() => {});
     };
@@ -213,7 +221,14 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibility);
       if (midnightTimer !== undefined) window.clearTimeout(midnightTimer);
     };
-  }, [syncTodayRollover, aiPrivacy.backgroundSync, connectedSources, syncHealthConnect]);
+  }, [
+    syncTodayRollover,
+    aiPrivacy.backgroundSync,
+    connectedSources,
+    syncHealthConnect,
+    refreshHealthConnectStatus,
+    ingestPendingBackgroundSnapshot,
+  ]);
 
   // Listen for Android Share-Intents (ACTION_SEND / /share-meal), Deep-Links (caltrack:// / kadenz://),
   // and native Launcher App Shortcuts on both cold start and while app is already running

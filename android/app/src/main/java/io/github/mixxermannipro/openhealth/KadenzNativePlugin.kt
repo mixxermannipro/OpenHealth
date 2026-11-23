@@ -1,23 +1,23 @@
 package io.github.mixxermannipro.openhealth
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import com.getcapacitor.JSObject
 import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
@@ -27,7 +27,6 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 @CapacitorPlugin(
     name = "KadenzNative",
@@ -38,8 +37,6 @@ import java.util.concurrent.TimeUnit
 class KadenzNativePlugin : Plugin() {
 
     companion object {
-        private const val BG_SYNC_WORK_NAME = "kadenz_periodic_health_sync"
-
         @Volatile
         private var activeInstance: KadenzNativePlugin? = null
 
@@ -309,22 +306,7 @@ class KadenzNativePlugin : Plugin() {
     fun configureBackgroundSync(call: PluginCall) {
         val enabled = call.getBoolean("enabled", true) ?: true
         try {
-            val workManager = WorkManager.getInstance(context)
-            if (enabled) {
-                val constraints = Constraints.Builder()
-                    .setRequiresBatteryNotLow(true)
-                    .build()
-                val request = PeriodicWorkRequestBuilder<HealthSyncWorker>(6, TimeUnit.HOURS)
-                    .setConstraints(constraints)
-                    .build()
-                workManager.enqueueUniquePeriodicWork(
-                    BG_SYNC_WORK_NAME,
-                    ExistingPeriodicWorkPolicy.UPDATE,
-                    request
-                )
-            } else {
-                workManager.cancelUniqueWork(BG_SYNC_WORK_NAME)
-            }
+            HealthSyncScheduler.ensureScheduled(context, enabled)
             call.resolve(JSObject().apply {
                 put("ok", true)
                 put("enabled", enabled)
@@ -334,6 +316,91 @@ class KadenzNativePlugin : Plugin() {
                 put("ok", false)
                 put("error", e.message ?: "workmanager_error")
             })
+        }
+    }
+
+    @PluginMethod
+    fun isBatteryOptimizationIgnored(call: PluginCall) {
+        val ignored = try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+        } catch (_: Exception) {
+            false
+        }
+        call.resolve(JSObject().apply { put("ignored", ignored) })
+    }
+
+    @SuppressLint("BatteryLife")
+    @PluginMethod
+    fun requestIgnoreBatteryOptimization(call: PluginCall) {
+        activity.runOnUiThread {
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                if (pm?.isIgnoringBatteryOptimizations(context.packageName) == true) {
+                    call.resolve(JSObject().apply { put("ignored", true) })
+                    return@runOnUiThread
+                }
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                activity.startActivity(intent)
+                call.resolve(JSObject().apply { put("requested", true) })
+            } catch (_: Exception) {
+                try {
+                    val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(fallback)
+                    call.resolve(JSObject().apply { put("requested", true) })
+                } catch (e: Exception) {
+                    call.resolve(JSObject().apply { put("requested", false) })
+                }
+            }
+        }
+    }
+
+    @PluginMethod
+    fun isAppInstalled(call: PluginCall) {
+        val packageName = call.getString("packageName") ?: ""
+        val installed = if (packageName.isBlank()) {
+            false
+        } else {
+            try {
+                context.packageManager.getPackageInfo(packageName, 0)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+        call.resolve(JSObject().apply { put("installed", installed) })
+    }
+
+    @PluginMethod
+    fun openExternalApp(call: PluginCall) {
+        val packageName = call.getString("packageName") ?: ""
+        if (packageName.isBlank()) {
+            call.resolve(JSObject().apply { put("opened", false) })
+            return
+        }
+        activity.runOnUiThread {
+            try {
+                val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(launchIntent)
+                    call.resolve(JSObject().apply { put("opened", true) })
+                } else {
+                    val storeIntent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("market://details?id=$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    activity.startActivity(storeIntent)
+                    call.resolve(JSObject().apply { put("opened", true); put("store", true) })
+                }
+            } catch (_: Exception) {
+                call.resolve(JSObject().apply { put("opened", false) })
+            }
         }
     }
 
@@ -349,9 +416,9 @@ class KadenzNativePlugin : Plugin() {
     fun getDeviceInfo(call: PluginCall) {
         val versionName = try {
             val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            pInfo.versionName ?: "1.0.0"
+            pInfo.versionName ?: "1.1.0"
         } catch (_: Exception) {
-            "1.0.0"
+            "1.1.0"
         }
         call.resolve(JSObject().apply {
             put("platform", "android")

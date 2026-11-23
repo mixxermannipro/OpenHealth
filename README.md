@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./public/pwa-512x512.png" alt="KADENZ App Icon" width="112" height="112" />
+
 # KADENZ · OpenHealth
 
 **Local-First Gesundheits-, Erholungs-, Schlaf-, Trainings- & 0 € KI-Ernährungsintelligenz für Android & Web**
@@ -14,7 +16,7 @@
 [⬇️ Android APK herunterladen](https://github.com/mixxermannipro/OpenHealth/releases/latest) ·
 [✨ Funktionen](#-funktionen-im-überblick) ·
 [🤖 Android-Systemintegrationen](#-native-android-systemintegrationen) ·
-[⌚ Uhren & Health Connect](#-uhren-wearables--health-connect) ·
+[⌚ COROS, Uhren & Health Connect](#-uhren-coros--health-connect) ·
 [🍽️ 0 € KI-Ernährung](#-0--ki-mahlzeiten-import-ohne-api-kosten) ·
 [🛠️ Selbst bauen](#-lokale-entwicklung--apk-selbst-bauen) ·
 [⚖️ Lizenz](#-lizenz-gnu-agpl-30)
@@ -30,7 +32,7 @@
 Während klassische Fitness- und Recovery-Apps deine sensibelsten Körperdaten auf fremde Server hochladen, monatliche Abos verlangen oder dich an einen einzigen Hersteller binden, verfolgt KADENZ konsequent drei Prinzipien:
 
 1. **100 % Local-First & Offline-fähig**: Deine gesamten Daten (Profile, Schlaf, HRV, Ruhepuls, Trainings, Mahlzeiten, Wasser, Check-ins) liegen ausschließlich in einer lokalen Datenbank (`IndexedDB` / Dexie) auf deinem eigenen Gerät.
-2. **Geräteunabhängig über offene Standards**: Native Anbindung an **Android Health Connect** (bündelt Garmin, COROS, Polar, Samsung Health, Fitbit, Oura, Withings, Suunto u. v. m.) sowie direkter Datei-Import für **GPX**, **TCX**, **Apple Health XML** und **Health Connect JSON** inklusive automatischer Duplikaterkennung.
+2. **Geräteunabhängig über Android Health Connect & offene Standards**: Dauerhafte 15-Minuten-Hintergrundsynchronisation über **Android Health Connect** (bündelt COROS, Garmin, Polar, Samsung Health, Fitbit, Oura, Withings, Suunto u. v. m.) sowie direkter Datei-Import für **`.fit`**, **`.gpx`**, **`.tcx`**, **Apple Health `.xml`** und **Health Connect `.json`** inklusive automatischer Duplikaterkennung.
 3. **0 € Betriebskosten für KI-Kalorientracking**: Nutze deine eigene KI-App (Gemini, ChatGPT, Claude) für Essensfotos oder Freitext und übergib das Ergebnis mit einem Tipp über das **Android Teilen-Menü**, die **Zwischenablage** oder per **Deep-Link** – ganz ohne API-Keys oder Serverkosten.
 
 ---
@@ -39,19 +41,17 @@ Während klassische Fitness- und Recovery-Apps deine sensibelsten Körperdaten a
 
 ### 1. APK herunterladen
 1. Öffne auf deinem Android-Handy die [**Releases-Seite**](https://github.com/mixxermannipro/OpenHealth/releases/latest).
-2. Lade unter **Assets** die Datei **`KADENZ-OpenHealth-v1.0.0.apk`** herunter.
+2. Lade unter **Assets** die neueste Datei **`KADENZ-OpenHealth-v1.1.0.apk`** herunter.
 
 ### 2. APK installieren
 1. Tippe nach dem Download auf die `.apk`-Datei in deinen Benachrichtigungen oder im *Downloads*-Ordner.
 2. Falls Android nachfragt, aktiviere einmalig **„Aus dieser Quelle zulassen“** (für deinen Browser bzw. Dateimanager).
 3. Tippe auf **Installieren** und starte **KADENZ**.
 
-### 3. Android Health Connect verbinden (empfohlen)
-1. Öffne in KADENZ den Tab **Mehr → Datenquellen & Uhren → Health Connect** (oder aktiviere Health Connect direkt beim Ersteinrichtungs-Assistenten).
-2. Bestätige die gewünschten Lese- und optionalen Schreibberechtigungen im Android-Systemdialog.
-   - **Android 14 / 15 / 16**: Health Connect ist bereits fest im System integriert.
-   - **Android 9 – 13**: Falls Health Connect noch nicht installiert ist, öffnet KADENZ automatisch den passenden Play-Store-Eintrag.
-3. Stelle in deiner Uhren-App (z. B. Garmin Connect, COROS, Polar Flow, Samsung Health, Fitbit, Oura, Zepp) sicher, dass die Synchronisierung mit **Health Connect** aktiviert ist. KADENZ liest alle Daten lokal ein und ordnet sie automatisch der richtigen Quelle zu.
+### 3. Dauerhaften Android Health Connect Sync & COROS einrichten
+1. Öffne in KADENZ **Mehr → Datenquellen & Uhren → Health Connect** und erteile die Lese-, Hintergrund- (`READ_HEALTH_DATA_IN_BACKGROUND`) und Verlaufsberechtigungen (`READ_HEALTH_DATA_HISTORY`, bis 90 Tage).
+2. Tippe anschließend auf **„Akku-Optimierung deaktivieren“**, damit Android (Samsung, Xiaomi, Pixel, OnePlus) den 15-Minuten-Hintergrund-Sync niemals im Schlaf beendet.
+3. **Für COROS-Uhren**: Öffne die **COROS App → Profil → Einstellungen → Drittanbieter-Apps → Health Connect** (direkt aus KADENZ per 1-Tap-Button erreichbar) und aktiviere Schlaf, Herzfrequenz, Schritte, Distanz & Trainings. Alternativ kannst du einzelne Workouts direkt als **`.fit`** oder **`.gpx`** importieren.
 
 ---
 
@@ -97,45 +97,44 @@ KADENZ ist keine bloße WebView-Hülle, sondern integriert alle relevanten Andro
 
 | Android-Schnittstelle | Implementierung | Zweck in der App |
 |---|---|---|
-| **Android Health Connect** | `HealthConnectPlugin.kt` (Jetpack `connect-client:1.1.0`) | Echter lokaler Lese-Abgleich für Schritte, aktive/gesamte Kalorien, Schlaf inkl. Phasen (Wach/Leicht/Tief/REM), HRV (RMSSD), Ruhepuls, Trainings inkl. Herzfrequenz & Distanz, Gewicht, Körperfett, VO₂max, SpO₂, Atemfrequenz & Wasser + optionaler Schreib-Sync für Mahlzeiten, Wasser & Gewicht. |
+| **Android Health Connect (Vollsync)** | `HealthConnectPlugin.kt` + `HealthConnectSyncEngine.kt` (`connect-client:1.1.0`) | Liest **Schlaf inkl. Phasen** (Wach/Leicht/Tief/REM + intelligentes Zusammenführen geteilter Nächte), **HRV (RMSSD)**, **Ruhepuls** (+ automatische Nacht-Puls-Ableitung falls kein RHR-Record vorliegt), **Trainings** (inkl. echter HR-Zeitreihe, Distanz, Höhenmeter, Kadenz & Kalorien), **Schritte**, **aktive/gesamte Kalorien**, **VO₂max**, **SpO₂**, **Atemfrequenz**, **Hauttemperatur**, **Gewicht**, **Körperfett**, **Muskelmasse**, **Wasser** und **externe Mahlzeiten** + optionaler Schreib-Sync (Mahlzeiten, Wasser, Gewicht). |
+| **Dauerhafter Hintergrund-Sync** | `HealthSyncWorker.kt` + `BootCompletedReceiver.kt` + `READ_HEALTH_DATA_IN_BACKGROUND` + `READ_HEALTH_DATA_HISTORY` | Synchronisiert alle **15 Minuten** zuverlässig im Hintergrund über `WorkManager`, überlebt Neustarts & App-Updates, bietet 1-Tap **Akku-Optimierung deaktivieren** und lädt bis zu **90 Tage Historie** für sofortige 28-Tage-Baselines. |
 | **Health Connect Privacy Rationale** | `PermissionsRationaleActivity.kt` (`ACTION_SHOW_PERMISSIONS_RATIONALE` & `VIEW_PERMISSION_USAGE`) | Von Android 9–16 vorgeschriebene lokale Datenschutz-Erklärung direkt aus den Android-Systemeinstellungen aufrufbar. |
 | **Android Share-Target (`ACTION_SEND`)** | `MainActivity.kt` + `KadenzNativePlugin.kt` | KADENZ erscheint nativ im Android-Teilen-Menü für `text/plain` (z. B. Antworten aus Gemini, ChatGPT, Claude) – funktioniert bei Kaltstart und laufender App (`singleTask` / `onNewIntent`). |
 | **Custom Deep-Links (`ACTION_VIEW`)** | `caltrack://`, `kadenz://`, `web+caltrack://`, `web+kadenz://` | Direkter Import strukturierter Mahlzeiten-Links aus Shortcuts, Automationen (Tasker/MacroDroid) oder KI-Antworten. |
-| **Launcher App-Shortcuts** | `res/xml/shortcuts.xml` | Langer Druck auf das KADENZ-App-Icon öffnet direkt **„Mahlzeit erfassen“** oder **„Schlaf ansehen“**. |
+| **Launcher App-Shortcuts & Material You Icon** | `res/xml/shortcuts.xml` + `ic_launcher_monochrome.xml` | Modernes Obsidian-Liquid-Glass-Icon inkl. Android 13+ Material You Themed Icon sowie Langer-Druck-Shortcuts für *Mahlzeit erfassen* & *Schlaf ansehen*. |
 | **Kamera-Barcode-Scanner** | `CAMERA`-Runtime-Permission + `BarcodeDetector` & **`@zxing/browser` Offline-Fallback** | Funktioniert auf **jedem** Android-Gerät (auch ohne Google Play Services / GrapheneOS) direkt im Live-Kamerabild für EAN-8, EAN-13, UPC-A, UPC-E & Code-128. |
-| **Native Zwischenablage** | `ClipboardManager` in `KadenzNativePlugin.kt` | Zuverlässiges 1-Tap Kopieren (KI-Prompt) und 1-Tap Einfügen (KI-Antwort) ohne WebView-Einschränkungen. |
-| **Native Haptik** | `VibratorManager` / `VibrationEffect` (`EFFECT_TICK`, `EFFECT_CLICK`, Waveforms) | Präzises taktiles Feedback beim Navigieren, Speichern und auf Slidern (in den Einstellungen abschaltbar). |
+| **Native Zwischenablage & Haptik** | `ClipboardManager` + `VibratorManager` (`EFFECT_TICK`, `EFFECT_CLICK`, Waveforms) | Zuverlässiges 1-Tap Kopieren/Einfügen & präzises taktiles Feedback ohne WebView-Einschränkungen. |
 | **Nativer JSON-Backup-Export** | `FileProvider` + `Intent.ACTION_SEND` | Exportiert das komplette lokale Backup zuverlässig über das Android-Teilen-/Speichern-Menü (Downloads, Nextcloud, Drive, lokaler Speicher). |
-| **Edge-to-Edge & System-Bars** | `WindowCompat` + `WindowInsetsCompat` + CSS-Safe-Areas | Saubere Anpassung an Statusleiste, Kamera-Punch-Hole und 3-Button-/Gesten-Navigation inkl. dynamischer Icon-Farbe (Dark/Light). |
-| **Hardware-/Gesten-Zurück-Taste** | `OnBackPressedCallback` | Schließt zuerst geöffnete Modals/Sheets, dann Unterseiten, kehrt zum Heute-Tab zurück und minimiert erst danach die App. |
-| **Hintergrund-Abgleich** | `WorkManager` (`HealthSyncWorker.kt`) + Resume-Auto-Sync | Steuert den periodischen Sync-Checkpoint und synchronisiert Health Connect beim Zurückkehren in die App (gedrosselt & akkuschonend). |
+| **Edge-to-Edge, System-Bars & Back-Taste** | `WindowCompat` + `WindowInsetsCompat` + `OnBackPressedCallback` | Saubere Anpassung an Statusleiste, Punch-Hole, Navigationsleiste (Dark/Light) sowie logische Zurück-Navigation durch Modals, Unterseiten und Tabs. |
 
 ---
 
-## ⌚ Uhren, Wearables & Health Connect
+## ⌚ Uhren, COROS & Health Connect
 
-### Live-Abgleich über Android Health Connect
-KADENZ liest Daten aus Android Health Connect und erkennt anhand der `dataOrigin.packageName`-Metadaten automatisch den ursprünglichen Hersteller:
-- **Garmin** (`Garmin Connect`)
-- **COROS** (`COROS App`)
-- **Polar** (`Polar Flow`)
-- **Samsung Health** (Galaxy Watch / Ring)
-- **Fitbit**
-- **Oura**
-- **Suunto**
-- **Amazfit / Zepp**
-- **Withings**
-- **Google Fit / Android Health Connect**
+### COROS Uhren (PACE, APEX, VERTIX) kostenlos verbinden
+Da die offizielle COROS Partner-API nur für kommerzielle Server-Plattformen mit bestehender Nutzerbasis freigegeben wird, bindet KADENZ COROS-Uhren **vollständig kostenlos und dauerhaft** über zwei Wege ein:
+1. **Vollautomatisch über Android Health Connect**:
+   - In der **COROS App**: *Profil → Einstellungen → Drittanbieter-Apps → Health Connect* aktivieren (Schlaf, Herzfrequenz, Schritte, Distanz & Trainings freigeben).
+   - In **KADENZ**: *Mehr → Datenquellen & Uhren → Health Connect* verbinden, **Dauerhaften Hintergrund-Sync** erlauben und **Akku-Optimierung deaktivieren**.
+   - KADENZ ordnet alle von der COROS App geschriebenen Daten automatisch als **COROS** zu, führt geteilte Schlafphasen sauber zusammen und leitet bei Bedarf sogar den nächtlichen Ruhepuls aus den gemessenen Nacht-Herzfrequenzdaten ab.
+2. **Direkter `.FIT` / `.GPX` / `.TCX` Import**:
+   - Exportiere einzelne Workouts direkt aus der COROS App (oder dem COROS Training Hub) als binäre **`.fit`**-Datei und importiere sie 100 % verlustfrei inkl. Herzfrequenz-Zeitreihe, Kadenz, Höhenmetern und Pace.
+
+### Alle weiteren Wearables über Android Health Connect
+KADENZ erkennt anhand der `dataOrigin.packageName`-Metadaten automatisch alle an Health Connect angeschlossenen Hersteller:
+**COROS**, **Garmin** (`Garmin Connect`), **Polar** (`Polar Flow`), **Samsung Health**, **Fitbit**, **Oura**, **Suunto**, **Amazfit / Zepp**, **Withings** und **Google Fit / Health Connect**.
 
 ### Direkter Datei-Import (Offene Standards)
 Unter **Mehr → Datenquellen & Uhren → Offener Datei-Import** kannst du jederzeit lokale Exportdateien einlesen:
+- **`.fit`** (Binäre COROS-, Garmin-, Polar- & Suunto-Workouts inkl. HR-Zeitreihe, Höhenmeter & Kadenz)
 - **`.gpx`** (GPS-Tracks inkl. Herzfrequenz-Extensions, Höhenmeter & Distanz)
 - **`.tcx`** (Training Center XML – Garmin, COROS, Polar)
 - **`.xml`** (Apple Health `export.xml` – Trainings, Schlaf, HRV, Ruhepuls)
 - **`.json`** (Health Connect Exporte)
 
 ### Intelligente Duplikaterkennung
-Wenn zwei Quellen dasselbe Training aufzeichnen (z. B. Uhr + Health Connect), verhindert `mergeSyncedBatch` doppelte Belastungszählung anhand von Sportart, Startzeitfenster (±20 Min.), Dauer (±15 %) und Distanz (±0,45 km) – stets unter Berücksichtigung deiner gewählten Quellenpriorität.
+Wenn zwei Quellen dasselbe Training aufzeichnen (z. B. `.fit`-Import + Health Connect), verhindert `mergeSyncedBatch` doppelte Belastungszählung anhand von Sportart, Startzeitfenster (±20 Min.), Dauer (±15 %) und Distanz (±0,45 km) – stets unter Berücksichtigung deiner gewählten Quellenpriorität.
 
 ---
 

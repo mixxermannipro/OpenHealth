@@ -5,6 +5,7 @@ import {
   DeviceProviderId,
   HRVObservation,
   HydrationEntry,
+  MealEntry,
   RestingHeartRateObservation,
   SleepSession,
   SourcePriorityPreferences,
@@ -24,6 +25,7 @@ export interface SyncBatchPayload {
   dailyActivities: DailyActivitySummary[];
   bodyMeasurements?: BodyMeasurement[];
   hydrationEntries?: HydrationEntry[];
+  meals?: MealEntry[];
 }
 
 export interface DeduplicationReport {
@@ -280,6 +282,7 @@ export function mergeSyncedBatch(
     dailyActivities: DailyActivitySummary[];
     bodyMeasurements?: BodyMeasurement[];
     hydrationEntries?: HydrationEntry[];
+    meals?: MealEntry[];
   },
   batch: SyncBatchPayload,
   priorities: SourcePriorityPreferences
@@ -291,6 +294,7 @@ export function mergeSyncedBatch(
   dailyActivities: DailyActivitySummary[];
   bodyMeasurements: BodyMeasurement[];
   hydrationEntries: HydrationEntry[];
+  meals: MealEntry[];
   report: DeduplicationReport;
 } {
   const nextWorkouts = [...current.workouts];
@@ -300,6 +304,7 @@ export function mergeSyncedBatch(
   const nextActivities = [...current.dailyActivities];
   const nextBody = [...(current.bodyMeasurements ?? [])];
   const nextHydration = [...(current.hydrationEntries ?? [])];
+  const nextMeals = [...(current.meals ?? [])];
 
   let importedWorkouts = 0;
   let deduplicatedWorkouts = 0;
@@ -312,11 +317,15 @@ export function mergeSyncedBatch(
     if (dupIdx !== -1) {
       deduplicatedWorkouts++;
       const existing = nextWorkouts[dupIdx];
-      if (w.sourceProvider === priorities.workouts && existing.sourceProvider !== priorities.workouts) {
+      if (
+        w.sourceProvider === priorities.workouts && existing.sourceProvider !== priorities.workouts
+      ) {
         nextWorkouts[dupIdx] = w;
         notes.push(
           `Training „${w.title}“ am ${w.date} wurde mit priorisierter Quelle (${w.sourceProvider}) zusammengeführt (keine Doppelzählung).`
         );
+      } else if (existing.sourceRecordId === w.sourceRecordId && w.timeSeries && !existing.timeSeries) {
+        nextWorkouts[dupIdx] = { ...existing, ...w };
       } else {
         notes.push(
           `Duplikat erkannt: „${w.title}“ am ${w.date} bereits durch ${existing.sourceProvider} erfasst — Belastung nicht doppelt gezählt.`
@@ -345,7 +354,14 @@ export function mergeSyncedBatch(
     const idx = nextRhr.findIndex((ex) => ex.date === r.date);
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (r.sourceProvider === priorities.heartRate || nextRhr[idx].sourceRecordId === r.sourceRecordId) {
+      const existing = nextRhr[idx];
+      const incomingIsMeasured = r.provenance === 'measured';
+      const existingIsEstimate = existing.provenance !== 'measured';
+      if (
+        r.sourceProvider === priorities.heartRate ||
+        existing.sourceRecordId === r.sourceRecordId ||
+        (incomingIsMeasured && existingIsEstimate)
+      ) {
         nextRhr[idx] = r;
       }
     } else {
@@ -396,6 +412,7 @@ export function mergeSyncedBatch(
           vo2MaxEstimate: a.vo2MaxEstimate ?? existing.vo2MaxEstimate,
           spo2Percent: a.spo2Percent ?? existing.spo2Percent,
           respiratoryRateBpm: a.respiratoryRateBpm ?? existing.respiratoryRateBpm,
+          skinTempDeviationC: a.skinTempDeviationC ?? existing.skinTempDeviationC,
         };
       }
     } else {
@@ -413,7 +430,12 @@ export function mergeSyncedBatch(
     if (idx !== -1) {
       deduplicatedObservations++;
       if (b.sourceProvider === priorities.weight || nextBody[idx].sourceRecordId === b.sourceRecordId) {
-        nextBody[idx] = { ...nextBody[idx], ...b };
+        nextBody[idx] = {
+          ...nextBody[idx],
+          ...b,
+          bodyFatPercent: b.bodyFatPercent ?? nextBody[idx].bodyFatPercent,
+          muscleMassKg: b.muscleMassKg ?? nextBody[idx].muscleMassKg,
+        };
       }
     } else {
       nextBody.push(b);
@@ -432,6 +454,20 @@ export function mergeSyncedBatch(
     }
   }
 
+  for (const meal of batch.meals ?? []) {
+    const exists = nextMeals.some(
+      (ex) =>
+        ex.id === meal.id ||
+        (ex.date === meal.date &&
+          ex.totalCalories === meal.totalCalories &&
+          ex.title.trim().toLowerCase() === meal.title.trim().toLowerCase())
+    );
+    if (!exists) {
+      nextMeals.unshift(meal);
+      importedObservations++;
+    }
+  }
+
   return {
     workouts: nextWorkouts,
     hrvObservations: nextHrv,
@@ -440,6 +476,7 @@ export function mergeSyncedBatch(
     dailyActivities: nextActivities,
     bodyMeasurements: nextBody.sort((a, b) => a.date.localeCompare(b.date)),
     hydrationEntries: nextHydration,
+    meals: nextMeals,
     report: {
       importedWorkouts,
       deduplicatedWorkouts,

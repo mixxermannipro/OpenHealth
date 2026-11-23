@@ -1,3 +1,4 @@
+import FitParser from 'fit-file-parser';
 import {
   DeviceProviderId,
   HRVObservation,
@@ -6,12 +7,13 @@ import {
   SportType,
   UserProfile,
   WorkoutSession,
+  WorkoutTimeSeriesPoint,
 } from '../types/health';
 import { calculateWorkoutLoad } from '../engine/calculations';
 import { toLocalDateKey } from '../utils/formatters';
 
 export interface FileImportResult {
-  format: 'gpx' | 'tcx' | 'apple_health_xml' | 'health_connect_json';
+  format: 'fit' | 'gpx' | 'tcx' | 'apple_health_xml' | 'health_connect_json';
   workouts: WorkoutSession[];
   hrvObservations: HRVObservation[];
   rhrObservations: RestingHeartRateObservation[];
@@ -422,5 +424,175 @@ export function parseHealthConnectJson(jsonText: string, profile: UserProfile): 
     rhrObservations,
     sleepSessions: [],
     summary: `Health Connect JSON: ${hrvObservations.length} HRV, ${rhrObservations.length} Ruhepuls, ${workouts.length} Trainings importiert.`,
+  };
+}
+
+/**
+ * Binary Garmin / COROS / Polar / Suunto .FIT file parser.
+ * Extracts duration, distance, average/max heart rate, elevation gain, cadence,
+ * calories, and minute-by-minute HR time-series locally in the browser/WebView.
+ */
+export async function parseFitFile(
+  buffer: ArrayBuffer,
+  providerId: DeviceProviderId,
+  profile: UserProfile
+): Promise<FileImportResult> {
+  const parser = new FitParser({
+    force: true,
+    speedUnit: 'km/h',
+    lengthUnit: 'km',
+    temperatureUnit: 'celsius',
+    elapsedRecordField: true,
+    mode: 'list',
+  });
+
+  const data = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    parser.parse(buffer, (err, parsed) => {
+      if (err) reject(new Error(String(err)));
+      else resolve(((parsed as unknown) as Record<string, unknown>) || {});
+    });
+  });
+
+  const sessions = Array.isArray(data.sessions)
+    ? (data.sessions as Record<string, unknown>[])
+    : [];
+  const records = Array.isArray(data.records)
+    ? (data.records as Record<string, unknown>[])
+    : [];
+
+  if (sessions.length === 0 && records.length === 0) {
+    return {
+      format: 'fit',
+      workouts: [],
+      hrvObservations: [],
+      rhrObservations: [],
+      sleepSessions: [],
+      summary: 'Keine gültigen FIT-Trainingsdaten gefunden.',
+    };
+  }
+
+  const session = sessions[0] ?? {};
+  const rawStart = session.start_time ?? session.timestamp ?? records[0]?.timestamp;
+  const startDate =
+    rawStart instanceof Date
+      ? rawStart
+      : typeof rawStart === 'string' || typeof rawStart === 'number'
+        ? new Date(rawStart)
+        : new Date();
+  const startMs = Number.isNaN(startDate.getTime()) ? Date.now() : startDate.getTime();
+  const startIso = new Date(startMs).toISOString();
+  const dateKey = toLocalDateKey(new Date(startMs));
+
+  const elapsedSec = Number(session.total_timer_time ?? session.total_elapsed_time ?? 0);
+  const durationMinutes = Math.max(
+    1,
+    elapsedSec > 0 ? Math.round(elapsedSec / 60) : Math.max(1, Math.round(records.length / 60))
+  );
+
+  const rawDistKm = Number(session.total_distance ?? 0);
+  const distanceKm = rawDistKm > 0.05 ? Number(rawDistKm.toFixed(2)) : undefined;
+  const elevationGainM = Number(session.total_ascent ?? 0) > 0
+    ? Math.round(Number(session.total_ascent))
+    : undefined;
+  const caloriesKcal = Number(session.total_calories ?? 0) > 0
+    ? Math.round(Number(session.total_calories))
+    : undefined;
+  const cadenceRaw = Number(session.avg_running_cadence ?? session.avg_cadence ?? 0);
+  const cadenceSpm = cadenceRaw > 0
+    ? Math.round(cadenceRaw < 110 ? cadenceRaw * 2 : cadenceRaw)
+    : undefined;
+
+  const hrsFromRecords = records
+    .map((r) => Number(r.heart_rate ?? 0))
+    .filter((n) => Number.isFinite(n) && n >= 35 && n <= 230);
+
+  const avgHrBpm =
+    Number(session.avg_heart_rate ?? 0) > 35
+      ? Math.round(Number(session.avg_heart_rate))
+      : hrsFromRecords.length > 0
+        ? Math.round(hrsFromRecords.reduce((a, b) => a + b, 0) / hrsFromRecords.length)
+        : undefined;
+  const maxHrBpm =
+    Number(session.max_heart_rate ?? 0) > 35
+      ? Math.round(Number(session.max_heart_rate))
+      : hrsFromRecords.length > 0
+        ? Math.max(...hrsFromRecords)
+        : undefined;
+
+  const sport = mapSportName(String(session.sport ?? session.sub_sport ?? 'running'));
+
+  // Build downsampled HR time-series (up to 120 points)
+  const timeSeries: WorkoutTimeSeriesPoint[] = [];
+  if (records.length >= 3) {
+    const step = Math.max(1, Math.ceil(records.length / 120));
+    for (let i = 0; i < records.length; i += step) {
+      const rec = records[i];
+      const hr = Number(rec.heart_rate ?? 0);
+      if (!Number.isFinite(hr) || hr < 35 || hr > 230) continue;
+      const recTs = rec.timestamp instanceof Date ? rec.timestamp.getTime() : startMs + i * 1000;
+      const minuteOffset = Math.max(0, Math.round((recTs - startMs) / 60000));
+      const speedKmh = Number(rec.speed ?? rec.enhanced_speed ?? 0);
+      const paceSecPerKm = speedKmh > 1.5 ? Math.round(3600 / speedKmh) : undefined;
+      const ele = Number(rec.altitude ?? rec.enhanced_altitude ?? NaN);
+      timeSeries.push({
+        minuteOffset,
+        hrBpm: Math.round(hr),
+        paceSecPerKm,
+        elevationM: Number.isFinite(ele) ? Math.round(ele) : undefined,
+      });
+    }
+  }
+
+  const { rawLoad, normalizedLoad, zoneMinutes } = calculateWorkoutLoad(
+    { sport, durationMinutes, avgHrBpm, distanceKm },
+    profile
+  );
+
+  const sportTitle =
+    sport === 'running'
+      ? 'Lauf'
+      : sport === 'cycling'
+        ? 'Radfahrt'
+        : sport === 'swimming'
+          ? 'Schwimmen'
+          : sport === 'hiking'
+            ? 'Wanderung'
+            : sport === 'strength'
+              ? 'Krafttraining'
+              : 'Training';
+
+  const workout: WorkoutSession = {
+    id: `imp_fit_${dateKey}_${Date.now()}`,
+    date: dateKey,
+    timestamp: startIso,
+    sourceProvider: providerId,
+    sourceRecordId: `fit_${startIso}_${durationMinutes}_${Math.round((distanceKm ?? 0) * 100)}`,
+    dataQuality: avgHrBpm ? 'high' : 'moderate',
+    provenance: 'measured',
+    metricType: 'workout',
+    title: `${sportTitle} (${providerId === 'coros' ? 'COROS FIT' : 'FIT Import'})`,
+    sport,
+    startTimeIso: startIso,
+    durationMinutes,
+    distanceKm,
+    avgPaceSecPerKm: distanceKm && distanceKm > 0.2 ? Math.round((durationMinutes * 60) / distanceKm) : undefined,
+    avgHrBpm,
+    maxHrBpm,
+    cadenceSpm,
+    elevationGainM,
+    caloriesKcal: caloriesKcal ?? Math.round(durationMinutes * 10),
+    rawLoadScore: rawLoad,
+    normalizedLoad,
+    hrZoneMinutes: zoneMinutes,
+    timeSeries: timeSeries.length > 0 ? timeSeries : undefined,
+  };
+
+  return {
+    format: 'fit',
+    workouts: [workout],
+    hrvObservations: [],
+    rhrObservations: [],
+    sleepSessions: [],
+    summary: `FIT importiert: ${workout.title} (${workout.durationMinutes} Min.${workout.distanceKm ? `, ${workout.distanceKm} km` : ''})`,
   };
 }

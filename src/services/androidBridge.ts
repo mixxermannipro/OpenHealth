@@ -7,12 +7,14 @@ import {
   HydrationEntry,
   MealCategory,
   MealEntry,
+  MeasurementProvenance,
   RestingHeartRateObservation,
   SleepSession,
   SleepStageSegment,
   SportType,
   UserProfile,
   WorkoutSession,
+  WorkoutTimeSeriesPoint,
 } from '../types/health';
 import { calculateWorkoutLoad } from '../engine/calculations';
 import type { HapticPatternName } from '../utils/haptics';
@@ -52,10 +54,20 @@ export interface HealthConnectPermissionSummary {
   hasReadAccess: boolean;
   hasWriteAccess: boolean;
   allGranted: boolean;
+  backgroundReadSupported?: boolean;
+  backgroundReadGranted?: boolean;
+  historyReadSupported?: boolean;
+  historyReadGranted?: boolean;
+  lastBackgroundSyncAt?: string;
+  lastBackgroundSyncStatus?: string;
+  lastBackgroundSyncRecords?: number;
+  hasPendingBackgroundSnapshot?: boolean;
 }
 
 interface RawHealthConnectSyncResponse {
+  hasSnapshot?: boolean;
   syncedAt: string;
+  daysSynced?: number;
   grantedCount: number;
   hrvObservations: {
     id: string;
@@ -63,6 +75,7 @@ interface RawHealthConnectSyncResponse {
     timestamp: string;
     sourceProvider: string;
     sourceRecordId: string;
+    provenance?: string;
     value: number;
   }[];
   rhrObservations: {
@@ -71,6 +84,7 @@ interface RawHealthConnectSyncResponse {
     timestamp: string;
     sourceProvider: string;
     sourceRecordId: string;
+    provenance?: string;
     value: number;
   }[];
   sleepSessions: {
@@ -103,9 +117,12 @@ interface RawHealthConnectSyncResponse {
     sport: string;
     durationMinutes: number;
     distanceKm?: number;
+    elevationGainM?: number;
+    cadenceSpm?: number;
     avgHrBpm?: number;
     maxHrBpm?: number;
     caloriesKcal?: number;
+    timeSeries?: WorkoutTimeSeriesPoint[];
   }[];
   dailyActivities: {
     id: string;
@@ -120,6 +137,7 @@ interface RawHealthConnectSyncResponse {
     vo2MaxEstimate?: number;
     spo2Percent?: number;
     respiratoryRateBpm?: number;
+    skinTempDeviationC?: number;
   }[];
   bodyMeasurements: {
     id: string;
@@ -129,17 +147,31 @@ interface RawHealthConnectSyncResponse {
     sourceRecordId: string;
     weightKg: number;
     bodyFatPercent?: number;
+    muscleMassKg?: number;
   }[];
   hydrationEntries: {
     date: string;
     ml: number;
     updatedAt: string;
   }[];
+  meals?: {
+    id: string;
+    date: string;
+    timestamp: string;
+    category: string;
+    title: string;
+    totalCalories: number;
+    proteinG: number;
+    carbsG: number;
+    fatG: number;
+    fiberG: number;
+  }[];
 }
 
 export interface HealthConnectMappedBatch {
   providerId: DeviceProviderId;
   syncedAt: string;
+  daysSynced: number;
   grantedCount: number;
   hrvObservations: HRVObservation[];
   rhrObservations: RestingHeartRateObservation[];
@@ -148,6 +180,7 @@ export interface HealthConnectMappedBatch {
   dailyActivities: DailyActivitySummary[];
   bodyMeasurements: BodyMeasurement[];
   hydrationEntries: HydrationEntry[];
+  meals: MealEntry[];
 }
 
 interface KadenzNativePluginInterface {
@@ -165,6 +198,10 @@ interface KadenzNativePluginInterface {
     mimeType?: string;
   }): Promise<{ ok: boolean; path?: string }>;
   configureBackgroundSync(options: { enabled: boolean }): Promise<{ ok: boolean; enabled?: boolean }>;
+  isBatteryOptimizationIgnored(): Promise<{ ignored: boolean }>;
+  requestIgnoreBatteryOptimization(): Promise<{ ignored?: boolean; requested?: boolean }>;
+  isAppInstalled(options: { packageName: string }): Promise<{ installed: boolean }>;
+  openExternalApp(options: { packageName: string }): Promise<{ opened: boolean; store?: boolean }>;
   minimizeApp(): Promise<void>;
   getDeviceInfo(): Promise<{
     platform: string;
@@ -187,9 +224,16 @@ interface KadenzNativePluginInterface {
 interface HealthConnectPluginInterface {
   getStatus(): Promise<HealthConnectStatus>;
   checkPermissions(): Promise<HealthConnectPermissionSummary>;
-  requestPermissions(options?: { includeWrite?: boolean }): Promise<HealthConnectPermissionSummary>;
+  requestPermissions(options?: {
+    includeWrite?: boolean;
+    includeBackground?: boolean;
+    includeHistory?: boolean;
+  }): Promise<HealthConnectPermissionSummary>;
+  requestBackgroundPermission(): Promise<HealthConnectPermissionSummary>;
   openSettings(): Promise<{ opened: string }>;
   syncData(options?: { daysBack?: number }): Promise<RawHealthConnectSyncResponse>;
+  consumeBackgroundSnapshot(): Promise<RawHealthConnectSyncResponse>;
+  triggerImmediateBackgroundSync(): Promise<{ scheduled: boolean }>;
   writeWeight(options: { weightKg: number }): Promise<{ written: boolean }>;
   writeHydration(options: { deltaMl: number }): Promise<{ written: boolean }>;
   writeNutrition(options: {
@@ -245,6 +289,20 @@ function normalizeSport(raw?: string): SportType {
     return raw as SportType;
   }
   return 'other';
+}
+
+function normalizeProvenance(raw?: string): MeasurementProvenance {
+  if (raw === 'measured' || raw === 'wearable_estimate' || raw === 'app_estimate') {
+    return raw;
+  }
+  return 'measured';
+}
+
+function normalizeMealCategory(raw?: string): MealCategory {
+  if (raw === 'breakfast' || raw === 'lunch' || raw === 'dinner' || raw === 'snack') {
+    return raw;
+  }
+  return 'snack';
 }
 
 export function isNativeAndroid(): boolean {
@@ -441,7 +499,7 @@ export function subscribeToNativeIntents(
 }
 
 // =========================================================================
-// Native Hardware Back Button & Background Sync (WorkManager)
+// Native Hardware Back Button, Battery Optimization & Companion Apps
 // =========================================================================
 
 export function subscribeToNativeBackButton(onBack: () => void): () => void {
@@ -485,6 +543,46 @@ export async function configureNativeBackgroundSync(enabled: boolean): Promise<v
   }
 }
 
+export async function isBatteryOptimizationIgnored(): Promise<boolean> {
+  if (!isNativeAndroid()) return true;
+  try {
+    const res = await KadenzNative.isBatteryOptimizationIgnored();
+    return Boolean(res.ignored);
+  } catch {
+    return false;
+  }
+}
+
+export async function requestIgnoreBatteryOptimization(): Promise<boolean> {
+  if (!isNativeAndroid()) return true;
+  try {
+    const res = await KadenzNative.requestIgnoreBatteryOptimization();
+    return Boolean(res.ignored || res.requested);
+  } catch {
+    return false;
+  }
+}
+
+export async function isExternalAppInstalled(packageName: string): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await KadenzNative.isAppInstalled({ packageName });
+    return Boolean(res.installed);
+  } catch {
+    return false;
+  }
+}
+
+export async function openExternalWearableApp(packageName: string): Promise<boolean> {
+  if (!isNativeAndroid()) return false;
+  try {
+    const res = await KadenzNative.openExternalApp({ packageName });
+    return Boolean(res.opened);
+  } catch {
+    return false;
+  }
+}
+
 // =========================================================================
 // Native Android Health Connect API
 // =========================================================================
@@ -511,6 +609,10 @@ export async function checkHealthConnectPermissions(): Promise<HealthConnectPerm
       hasReadAccess: false,
       hasWriteAccess: false,
       allGranted: false,
+      backgroundReadSupported: false,
+      backgroundReadGranted: false,
+      historyReadSupported: false,
+      historyReadGranted: false,
     };
   }
   return HealthConnect.checkPermissions();
@@ -519,7 +621,15 @@ export async function checkHealthConnectPermissions(): Promise<HealthConnectPerm
 export async function requestHealthConnectPermissions(
   includeWrite = true
 ): Promise<HealthConnectPermissionSummary> {
-  return HealthConnect.requestPermissions({ includeWrite });
+  return HealthConnect.requestPermissions({
+    includeWrite,
+    includeBackground: true,
+    includeHistory: true,
+  });
+}
+
+export async function requestHealthConnectBackgroundPermission(): Promise<HealthConnectPermissionSummary> {
+  return HealthConnect.requestBackgroundPermission();
 }
 
 export async function openHealthConnectSettings(): Promise<void> {
@@ -527,12 +637,19 @@ export async function openHealthConnectSettings(): Promise<void> {
   await HealthConnect.openSettings();
 }
 
-export async function syncHealthConnectBatch(
-  profile: UserProfile,
-  daysBack = 30
-): Promise<HealthConnectMappedBatch> {
-  const raw = await HealthConnect.syncData({ daysBack });
+export async function triggerImmediateHealthConnectBackgroundSync(): Promise<void> {
+  if (!isNativeAndroid()) return;
+  try {
+    await HealthConnect.triggerImmediateBackgroundSync();
+  } catch {
+    // ignore
+  }
+}
 
+function mapRawHealthConnectSnapshot(
+  raw: RawHealthConnectSyncResponse,
+  profile: UserProfile
+): HealthConnectMappedBatch {
   const hrvObservations: HRVObservation[] = (raw.hrvObservations ?? []).map((h) => ({
     id: h.id,
     date: h.date,
@@ -540,7 +657,7 @@ export async function syncHealthConnectBatch(
     sourceProvider: normalizeProvider(h.sourceProvider),
     sourceRecordId: h.sourceRecordId,
     dataQuality: 'high',
-    provenance: 'measured',
+    provenance: normalizeProvenance(h.provenance),
     metricType: 'hrv_rmssd',
     unit: 'ms',
     value: h.value,
@@ -553,8 +670,8 @@ export async function syncHealthConnectBatch(
     timestamp: r.timestamp,
     sourceProvider: normalizeProvider(r.sourceProvider),
     sourceRecordId: r.sourceRecordId,
-    dataQuality: 'high',
-    provenance: 'measured',
+    dataQuality: r.provenance === 'wearable_estimate' ? 'moderate' : 'high',
+    provenance: normalizeProvenance(r.provenance),
     metricType: 'resting_hr',
     unit: 'bpm',
     value: r.value,
@@ -609,6 +726,8 @@ export async function syncHealthConnectBatch(
       startTimeIso: w.startTimeIso,
       durationMinutes: w.durationMinutes,
       distanceKm: w.distanceKm,
+      elevationGainM: w.elevationGainM,
+      cadenceSpm: w.cadenceSpm,
       avgPaceSecPerKm:
         w.distanceKm && w.distanceKm > 0.2
           ? Math.round((w.durationMinutes * 60) / w.distanceKm)
@@ -619,6 +738,7 @@ export async function syncHealthConnectBatch(
       rawLoadScore: rawLoad,
       normalizedLoad,
       hrZoneMinutes: zoneMinutes,
+      timeSeries: Array.isArray(w.timeSeries) && w.timeSeries.length > 0 ? w.timeSeries : undefined,
     };
   });
 
@@ -638,6 +758,7 @@ export async function syncHealthConnectBatch(
     vo2MaxEstimate: a.vo2MaxEstimate,
     spo2Percent: a.spo2Percent,
     respiratoryRateBpm: a.respiratoryRateBpm,
+    skinTempDeviationC: a.skinTempDeviationC,
   }));
 
   const bodyMeasurements: BodyMeasurement[] = (raw.bodyMeasurements ?? []).map((b) => ({
@@ -651,6 +772,7 @@ export async function syncHealthConnectBatch(
     metricType: 'body_measurement',
     weightKg: b.weightKg,
     bodyFatPercent: b.bodyFatPercent,
+    muscleMassKg: b.muscleMassKg,
   }));
 
   const hydrationEntries: HydrationEntry[] = (raw.hydrationEntries ?? []).map((h) => ({
@@ -659,9 +781,38 @@ export async function syncHealthConnectBatch(
     updatedAt: h.updatedAt,
   }));
 
+  const meals: MealEntry[] = (raw.meals ?? []).map((m) => ({
+    id: m.id,
+    date: m.date,
+    timestamp: m.timestamp,
+    category: normalizeMealCategory(m.category),
+    title: m.title,
+    subtitle: `${m.proteinG}g E · ${m.carbsG}g KH · ${m.fatG}g F`,
+    items: [
+      {
+        id: `${m.id}_item`,
+        name: m.title,
+        grams: 100,
+        calories: m.totalCalories,
+        proteinG: m.proteinG,
+        carbsG: m.carbsG,
+        fatG: m.fatG,
+        fiberG: m.fiberG,
+        source: 'manual',
+      },
+    ],
+    totalCalories: m.totalCalories,
+    proteinG: m.proteinG,
+    carbsG: m.carbsG,
+    fatG: m.fatG,
+    fiberG: m.fiberG,
+    analysisNote: 'Health Connect Sync',
+  }));
+
   return {
     providerId: 'health_connect',
     syncedAt: raw.syncedAt,
+    daysSynced: raw.daysSynced ?? 30,
     grantedCount: raw.grantedCount ?? 0,
     hrvObservations,
     rhrObservations,
@@ -670,7 +821,29 @@ export async function syncHealthConnectBatch(
     dailyActivities,
     bodyMeasurements,
     hydrationEntries,
+    meals,
   };
+}
+
+export async function syncHealthConnectBatch(
+  profile: UserProfile,
+  daysBack = 30
+): Promise<HealthConnectMappedBatch> {
+  const raw = await HealthConnect.syncData({ daysBack });
+  return mapRawHealthConnectSnapshot(raw, profile);
+}
+
+export async function consumeHealthConnectBackgroundSnapshot(
+  profile: UserProfile
+): Promise<HealthConnectMappedBatch | null> {
+  if (!isNativeAndroid()) return null;
+  try {
+    const raw = await HealthConnect.consumeBackgroundSnapshot();
+    if (!raw || !raw.hasSnapshot) return null;
+    return mapRawHealthConnectSnapshot(raw, profile);
+  } catch {
+    return null;
+  }
 }
 
 export async function writeWeightToHealthConnect(weightKg: number): Promise<void> {

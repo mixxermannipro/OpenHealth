@@ -40,6 +40,7 @@ import { useHealthStore } from '../../store/useHealthStore';
 import { validateImportPayload } from '../../db/database';
 import {
   parseAppleHealthXml,
+  parseFitFile,
   parseGpxFile,
   parseHealthConnectJson,
   parseTcxFile,
@@ -60,6 +61,7 @@ import {
 import {
   exportJsonBackupNative,
   isNativeAndroid,
+  openExternalWearableApp,
   writeTextToClipboard,
 } from '../../services/androidBridge';
 import { formatClockFromIso } from '../../utils/formatters';
@@ -88,10 +90,13 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     disconnectProvider,
     simulateProviderSync,
     connectHealthConnect,
+    requestHealthConnectBackgroundAccess,
+    requestDisableBatteryOptimization,
     syncHealthConnect,
     openHealthConnectAppSettings,
     healthConnectStatus,
     healthConnectPermissions,
+    batteryOptimizationIgnored,
     importExternalHealthFile,
     exportAllAsJson,
     importFromJson,
@@ -112,10 +117,13 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       disconnectProvider: s.disconnectProvider,
       simulateProviderSync: s.simulateProviderSync,
       connectHealthConnect: s.connectHealthConnect,
+      requestHealthConnectBackgroundAccess: s.requestHealthConnectBackgroundAccess,
+      requestDisableBatteryOptimization: s.requestDisableBatteryOptimization,
       syncHealthConnect: s.syncHealthConnect,
       openHealthConnectAppSettings: s.openHealthConnectAppSettings,
       healthConnectStatus: s.healthConnectStatus,
       healthConnectPermissions: s.healthConnectPermissions,
+      batteryOptimizationIgnored: s.batteryOptimizationIgnored,
       importExternalHealthFile: s.importExternalHealthFile,
       exportAllAsJson: s.exportAllAsJson,
       importFromJson: s.importFromJson,
@@ -128,6 +136,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   const { t, locale, setLocale } = useI18n();
   const [promptCopied, setPromptCopied] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showCorosGuide, setShowCorosGuide] = useState(false);
   const [hapticsOn, setHapticsOn] = useState<boolean>(() => isHapticsEnabled());
   const [importProvider, setImportProvider] = useState<DeviceProviderId>('coros');
   const healthFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -146,22 +155,25 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
       const lower = file.name.toLowerCase();
-      if (lower.endsWith('.gpx')) {
-        const res = parseGpxFile(text, importProvider, profile);
+      if (lower.endsWith('.fit')) {
+        const buf = await file.arrayBuffer();
+        const res = await parseFitFile(buf, importProvider, profile);
+        await importExternalHealthFile(res);
+      } else if (lower.endsWith('.gpx')) {
+        const res = parseGpxFile(await file.text(), importProvider, profile);
         await importExternalHealthFile(res);
       } else if (lower.endsWith('.tcx')) {
-        const res = parseTcxFile(text, importProvider, profile);
+        const res = parseTcxFile(await file.text(), importProvider, profile);
         await importExternalHealthFile(res);
       } else if (lower.endsWith('.xml')) {
-        const res = parseAppleHealthXml(text, profile);
+        const res = parseAppleHealthXml(await file.text(), profile);
         await importExternalHealthFile(res);
       } else if (lower.endsWith('.json')) {
-        const res = parseHealthConnectJson(text, profile);
+        const res = parseHealthConnectJson(await file.text(), profile);
         await importExternalHealthFile(res);
       } else {
-        showToast('Unterstützte Formate: .gpx, .tcx, Apple Health .xml, Health Connect .json', 'warning');
+        showToast('Unterstützte Formate: .fit, .gpx, .tcx, Apple Health .xml, Health Connect .json', 'warning');
       }
     } catch {
       showToast('Datei konnte nicht gelesen werden. Bitte Format prüfen.', 'warning');
@@ -215,12 +227,12 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   };
 
   // =====================================================================
-  // SUB-VIEW 1: DATENQUELLEN (Real Android Health Connect + Open Imports)
+  // SUB-VIEW 1: DATENQUELLEN (Real Android Health Connect + COROS + Open Imports)
   // =====================================================================
   if (detailView === 'sources') {
     const sourceIcon = (id: DeviceProviderId) => {
       if (id === 'health_connect') return <Heart className="w-5 h-5 text-[var(--accent-recovery)]" />;
-      if (id === 'coros') return <Watch className="w-5 h-5 text-[var(--text-primary)]" />;
+      if (id === 'coros') return <Watch className="w-5 h-5 text-[var(--accent-hrv)]" />;
       if (id === 'garmin') return <Triangle className="w-5 h-5 text-[var(--text-primary)] fill-current" />;
       if (id === 'polar') return <CircleDot className="w-5 h-5 text-[var(--text-primary)]" />;
       return <Heart className="w-5 h-5 text-[var(--text-primary)]" />;
@@ -231,6 +243,8 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       connectedSources.find((s) => s.providerId === id)
     ).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
+    const hcConnected = connectedSources.some((s) => s.providerId === 'health_connect' && s.connected);
+
     const handleSourcePrimaryAction = (src: (typeof primarySources)[number]) => {
       if (src.providerId === 'apple_health') {
         setImportProvider('apple_health');
@@ -239,14 +253,18 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       }
       if (src.providerId === 'health_connect' && nativeAndroid) {
         if (src.connected) {
-          syncHealthConnect({ silent: false, daysBack: 30 });
+          syncHealthConnect({ silent: false });
         } else {
           connectHealthConnect();
         }
         return;
       }
+      if (src.providerId === 'coros' && nativeAndroid) {
+        haptics.selection();
+        setShowCorosGuide((prev) => !prev);
+        return;
+      }
       if (nativeAndroid) {
-        // On Android, Garmin / COROS / Polar sync via Health Connect or open GPX/TCX files
         setImportProvider(src.providerId);
         healthFileInputRef.current?.click();
         return;
@@ -282,7 +300,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
           </h1>
           <p className="text-[14.5px] leading-relaxed text-[var(--text-secondary)] max-w-md">
             {nativeAndroid
-              ? 'Verbinde Android Health Connect für echten Live-Abgleich von Schlaf, HRV, Puls, Schritten & Trainings — alle Wearables (Garmin, COROS, Polar, Samsung, Oura, Fitbit) fließen darüber lokal zusammen.'
+              ? 'Dauerhafte Android Health Connect Synchronisation für Schlafphasen, HRV, Ruhepuls, Schritte, Trainings, Vitalwerte & Ernährung — alle Wearables (COROS, Garmin, Polar, Samsung, Oura, Fitbit) fließen darüber lokal zusammen.'
               : t.more.sourcesDesc}
           </p>
         </header>
@@ -296,113 +314,253 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
             <div className="space-y-2.5">
               {primarySources.map((src) => {
                 const isHC = src.providerId === 'health_connect';
+                const isCoros = src.providerId === 'coros';
                 const isApple = src.providerId === 'apple_health';
                 const isWearableViaImport = nativeAndroid && !isHC && !isApple;
                 return (
-                  <div
-                    key={src.providerId}
-                    className="apple-card px-4 py-3.5 flex items-center justify-between gap-3"
-                  >
-                    <button
-                      type="button"
-                      disabled={isSyncing}
-                      onClick={() => handleSourcePrimaryAction(src)}
-                      className="flex-1 flex items-center gap-3.5 text-left min-w-0"
-                    >
-                      <span className="w-10 h-10 rounded-xl bg-[var(--bg-well)] flex items-center justify-center shrink-0">
-                        {sourceIcon(src.providerId)}
-                      </span>
-                      <div className="min-w-0">
-                        <p className="text-[15.5px] font-semibold text-[var(--text-primary)] truncate">
-                          {src.name}
-                        </p>
-                        {isHC && nativeAndroid ? (
-                          src.connected ? (
-                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)] flex-wrap">
-                              <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)] shrink-0" />
-                              <span>
-                                {t.more.connected}
-                                {healthConnectPermissions?.grantedCount
-                                  ? ` · ${healthConnectPermissions.grantedCount} Freigaben`
-                                  : ''}
-                                {src.lastSyncAt ? ` · ${formatClockFromIso(src.lastSyncAt)}` : ''}
-                              </span>
-                            </p>
-                          ) : (
-                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
-                              <PlusCircle className="w-3.5 h-3.5 shrink-0" />
-                              <span>
-                                {healthConnectStatus?.status === 'provider_update_required'
-                                  ? 'Health Connect im Play Store installieren'
-                                  : 'Nativ auf Android verbinden'}
-                              </span>
-                            </p>
-                          )
-                        ) : isWearableViaImport ? (
-                          <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
-                            <Upload className="w-3.5 h-3.5 shrink-0" />
-                            <span>Über Health Connect oder GPX/TCX-Datei</span>
-                          </p>
-                        ) : src.connected ? (
-                          <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
-                            <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)]" />
-                            <span>{t.more.connected}</span>
-                          </p>
-                        ) : isApple || src.comingSoon ? (
-                          <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]">
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>{t.more.xmlReady}</span>
-                          </p>
-                        ) : (
-                          <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
-                            <PlusCircle className="w-3.5 h-3.5" />
-                            <span>{t.more.add}</span>
-                          </p>
-                        )}
-                      </div>
-                    </button>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {isHC && nativeAndroid && src.connected && (
-                        <button
-                          type="button"
-                          onClick={() => openHealthConnectAppSettings()}
-                          className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
-                        >
-                          Rechte
-                        </button>
-                      )}
-                      {src.connected && !(isHC && nativeAndroid) && (
-                        <button
-                          type="button"
-                          onClick={() => disconnectProvider(src.providerId)}
-                          className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
-                        >
-                          {t.more.disconnect}
-                        </button>
-                      )}
+                  <div key={src.providerId} className="space-y-2">
+                    <div className="apple-card px-4 py-3.5 flex items-center justify-between gap-3">
                       <button
                         type="button"
-                        aria-label={`${src.name} synchronisieren`}
                         disabled={isSyncing}
                         onClick={() => handleSourcePrimaryAction(src)}
-                        className="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                        className="flex-1 flex items-center gap-3.5 text-left min-w-0"
                       >
-                        {isHC && nativeAndroid && isSyncing ? (
-                          <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent-recovery)]" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4" />
-                        )}
+                        <span className="w-10 h-10 rounded-xl bg-[var(--bg-well)] flex items-center justify-center shrink-0">
+                          {sourceIcon(src.providerId)}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[15.5px] font-semibold text-[var(--text-primary)] truncate">
+                            {src.name}
+                          </p>
+                          {isHC && nativeAndroid ? (
+                            src.connected ? (
+                              <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)] flex-wrap">
+                                <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)] shrink-0" />
+                                <span>
+                                  {t.more.connected}
+                                  {healthConnectPermissions?.grantedCount
+                                    ? ` · ${healthConnectPermissions.grantedCount} Freigaben`
+                                    : ''}
+                                  {src.lastSyncAt ? ` · ${formatClockFromIso(src.lastSyncAt)}` : ''}
+                                </span>
+                              </p>
+                            ) : (
+                              <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                                <PlusCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>
+                                  {healthConnectStatus?.status === 'provider_update_required'
+                                    ? 'Health Connect im Play Store installieren'
+                                    : 'Nativ auf Android verbinden (Schlaf, HRV, Trainings)'}
+                                </span>
+                              </p>
+                            )
+                          ) : isCoros && nativeAndroid ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <Watch className="w-3.5 h-3.5 shrink-0 text-[var(--accent-hrv)]" />
+                              <span>COROS Einrichtung (Health Connect &amp; .FIT)</span>
+                            </p>
+                          ) : isWearableViaImport ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <Upload className="w-3.5 h-3.5 shrink-0" />
+                              <span>Via Health Connect oder .FIT/.GPX/.TCX</span>
+                            </p>
+                          ) : src.connected ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
+                              <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)]" />
+                              <span>{t.more.connected}</span>
+                            </p>
+                          ) : isApple || src.comingSoon ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]">
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>{t.more.xmlReady}</span>
+                            </p>
+                          ) : (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
+                              <PlusCircle className="w-3.5 h-3.5" />
+                              <span>{t.more.add}</span>
+                            </p>
+                          )}
+                        </div>
                       </button>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isHC && nativeAndroid && src.connected && (
+                          <button
+                            type="button"
+                            onClick={() => openHealthConnectAppSettings()}
+                            className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
+                          >
+                            Rechte
+                          </button>
+                        )}
+                        {src.connected && !(isHC && nativeAndroid) && (
+                          <button
+                            type="button"
+                            onClick={() => disconnectProvider(src.providerId)}
+                            className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
+                          >
+                            {t.more.disconnect}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          aria-label={`${src.name} synchronisieren`}
+                          disabled={isSyncing}
+                          onClick={() => handleSourcePrimaryAction(src)}
+                          className="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                        >
+                          {isHC && nativeAndroid && isSyncing ? (
+                            <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent-recovery)]" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Dedicated COROS Android Setup & Direct .FIT Import Panel */}
+                    {isCoros && nativeAndroid && showCorosGuide && (
+                      <div className="apple-card p-4 space-y-3 border border-[var(--accent-hrv)]/30 bg-[var(--bg-elevated)]/70">
+                        <div className="space-y-1">
+                          <p className="text-[13.5px] font-semibold text-[var(--text-primary)]">
+                            COROS Uhr kostenlos &amp; dauerhaft verbinden
+                          </p>
+                          <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
+                            Die COROS Partner-API ist leider nur für kommerzielle Server-Plattformen freigegeben.
+                            Über <strong className="text-[var(--text-primary)]">Android Health Connect</strong> synchronisiert
+                            deine COROS-Uhr jedoch kostenlos &amp; vollautomatisch Schlaf, Herzfrequenz, Ruhepuls, Schritte
+                            und Trainings direkt in KADENZ:
+                          </p>
+                        </div>
+
+                        <ol className="text-[12px] text-[var(--text-secondary)] space-y-1.5 list-decimal pl-4">
+                          <li>
+                            Öffne die <strong className="text-[var(--text-primary)]">COROS App</strong> →{' '}
+                            <em>Profil → Einstellungen → Drittanbieter-Apps → Health Connect</em>.
+                          </li>
+                          <li>
+                            Aktiviere dort alle Kategorien (Schlaf, Herzfrequenz, Schritte, Trainings &amp; Distanz).
+                          </li>
+                          <li>
+                            Verbinde oben <strong className="text-[var(--text-primary)]">Health Connect</strong> und erlaube den
+                            dauerhaften Hintergrund-Abgleich (alle 15 Min.).
+                          </li>
+                        </ol>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              haptics.selection();
+                              const ok = await openExternalWearableApp('com.coros.coros');
+                              if (!ok) {
+                                showToast('COROS App nicht gefunden.', 'warning');
+                              }
+                            }}
+                            className="min-h-[40px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-xs font-semibold px-4 hover:opacity-90 transition-opacity"
+                          >
+                            COROS App öffnen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              haptics.tick();
+                              setImportProvider('coros');
+                              healthFileInputRef.current?.click();
+                            }}
+                            className="min-h-[40px] rounded-full bg-[var(--bg-well)] border border-[var(--border-hairline)] text-xs font-semibold text-[var(--text-primary)] px-4"
+                          >
+                            COROS .FIT / .GPX importieren
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Einstellungen + Real Offene Datei-Schnittstellen */}
+          {/* Einstellungen + Dauerhafter Hintergrund-Sync + Offene Datei-Schnittstellen */}
           <div className="lg:col-span-5 space-y-5">
+            {nativeAndroid && hcConnected && (
+              <div className="apple-card p-4 space-y-3 border border-[var(--accent-recovery)]/25">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-[var(--accent-recovery)] shrink-0" />
+                    <p className="text-[13.5px] font-semibold text-[var(--text-primary)]">
+                      Dauerhafter Hintergrund-Sync
+                    </p>
+                  </div>
+                  <span
+                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                      healthConnectPermissions?.backgroundReadGranted && batteryOptimizationIgnored
+                        ? 'bg-[var(--accent-recovery)]/15 text-[var(--accent-recovery)]'
+                        : 'bg-[var(--accent-calories)]/15 text-[var(--accent-calories)]'
+                    }`}
+                  >
+                    {healthConnectPermissions?.backgroundReadGranted && batteryOptimizationIgnored
+                      ? 'Optimal aktiv'
+                      : 'Einrichtung offen'}
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 text-[12px] text-[var(--text-secondary)]">
+                  <p>
+                    • Hintergrund-Leserecht (alle 15 Min.):{' '}
+                    <strong className="text-[var(--text-primary)]">
+                      {healthConnectPermissions?.backgroundReadGranted ? 'Aktiv ✓' : 'Fehlt noch'}
+                    </strong>
+                  </p>
+                  <p>
+                    • 90-Tage-Verlauf (Baselines &amp; Schlaf):{' '}
+                    <strong className="text-[var(--text-primary)]">
+                      {healthConnectPermissions?.historyReadGranted ? 'Aktiv ✓' : '30 Tage Standard'}
+                    </strong>
+                  </p>
+                  <p>
+                    • Akku-Optimierung:{' '}
+                    <strong className="text-[var(--text-primary)]">
+                      {batteryOptimizationIgnored ? 'Deaktiviert ✓ (kein Stopp)' : 'Aktiv (kann Sync bremsen)'}
+                    </strong>
+                  </p>
+                  {healthConnectPermissions?.lastBackgroundSyncAt && (
+                    <p className="text-[11.5px] text-[var(--text-muted)] tabular-nums pt-0.5">
+                      Letzter Hintergrund-Sync:{' '}
+                      {formatClockFromIso(healthConnectPermissions.lastBackgroundSyncAt)}
+                      {typeof healthConnectPermissions.lastBackgroundSyncRecords === 'number'
+                        ? ` · ${healthConnectPermissions.lastBackgroundSyncRecords} Einträge`
+                        : ''}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-2 pt-1">
+                  {healthConnectPermissions?.backgroundReadSupported &&
+                    !healthConnectPermissions?.backgroundReadGranted && (
+                      <button
+                        type="button"
+                        onClick={() => requestHealthConnectBackgroundAccess()}
+                        className="w-full min-h-[40px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-xs font-semibold px-4 hover:opacity-90"
+                      >
+                        Dauerhaften Hintergrund-Sync erlauben
+                      </button>
+                    )}
+
+                  {!batteryOptimizationIgnored && (
+                    <button
+                      type="button"
+                      onClick={() => requestDisableBatteryOptimization()}
+                      className="w-full min-h-[40px] rounded-full bg-[var(--bg-elevated)] border border-[var(--border-hairline)] text-xs font-semibold text-[var(--text-primary)] px-4"
+                    >
+                      Akku-Optimierung deaktivieren
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2.5">
               <p className="px-1 text-[13px] font-medium text-[var(--text-secondary)]">
                 {t.more.settingsLabel}
@@ -436,7 +594,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                         {t.more.bgSync}
                       </p>
                       <p className="text-[12px] text-[var(--text-secondary)]">
-                        {t.more.bgSyncSub}
+                        {nativeAndroid ? 'Alle 15 Min. automatisch via Health Connect' : t.more.bgSyncSub}
                       </p>
                     </div>
                   </div>
@@ -458,7 +616,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                     {t.more.openImportTitle}
                   </p>
                   <p className="text-[11.5px] text-[var(--text-secondary)]">
-                    {t.more.openImportSub}
+                    COROS/Garmin .FIT, .GPX, .TCX, Apple Health .XML &amp; Health Connect .JSON
                   </p>
                 </div>
               </div>
@@ -473,7 +631,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
               <input
                 ref={healthFileInputRef}
                 type="file"
-                accept=".gpx,.tcx,.xml,.json"
+                accept=".fit,.gpx,.tcx,.xml,.json"
                 onChange={handleExternalFileChange}
                 className="hidden"
               />

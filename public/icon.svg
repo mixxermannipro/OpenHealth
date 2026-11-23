@@ -1,16 +1,134 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#0D0F12" />
-  <circle cx="256" cy="256" r="158" stroke="#1E242E" stroke-width="26" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <!-- Deep obsidian luxury background -->
+    <radialGradient id="bgRadial" cx="50%" cy="32%" r="78%">
+      <stop offset="0%" stop-color="#171E29" />
+      <stop offset="52%" stop-color="#0B0E14" />
+      <stop offset="100%" stop-color="#050608" />
+    </radialGradient>
+
+    <!-- Subtle ambient vitality aurora behind the ring -->
+    <radialGradient id="auroraGlow" cx="52%" cy="48%" r="44%">
+      <stop offset="0%" stop-color="#5CE17C" stop-opacity="0.24" />
+      <stop offset="45%" stop-color="#38BDF8" stop-opacity="0.11" />
+      <stop offset="75%" stop-color="#818CF8" stop-opacity="0.05" />
+      <stop offset="100%" stop-color="#050608" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- Recessed obsidian glass track -->
+    <linearGradient id="trackGrad" x1="180" y1="180" x2="844" y2="844" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.13" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.05" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.11" />
+    </linearGradient>
+
+    <!-- Flagship luminous cadence arc gradient -->
+    <linearGradient id="ringGrad" x1="220" y1="760" x2="800" y2="230" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818CF8" />
+      <stop offset="32%" stop-color="#38BDF8" />
+      <stop offset="68%" stop-color="#2DD4BF" />
+      <stop offset="100%" stop-color="#5CE17C" />
+    </linearGradient>
+
+    <!-- Liquid-glass top highlight for arc -->
+    <linearGradient id="ringHighlight" x1="250" y1="180" x2="760" y2="680" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.58" />
+      <stop offset="45%" stop-color="#FFFFFF" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Inner glass disc -->
+    <radialGradient id="innerDisc" cx="50%" cy="30%" r="72%">
+      <stop offset="0%" stop-color="#1B2230" stop-opacity="0.88" />
+      <stop offset="100%" stop-color="#0B0E14" stop-opacity="0.96" />
+    </radialGradient>
+
+    <!-- Pearl-white to mint cadence pulse gradient -->
+    <linearGradient id="pulseGrad" x1="300" y1="512" x2="724" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#BAE6FD" />
+      <stop offset="32%" stop-color="#FFFFFF" />
+      <stop offset="68%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#86EFAC" />
+    </linearGradient>
+
+    <!-- Soft neon glow filters -->
+    <filter id="arcGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="24" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="pulseGlow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="14" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="dotGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Full-bleed obsidian canvas -->
+  <rect width="1024" height="1024" fill="url(#bgRadial)" />
+  <rect width="1024" height="1024" fill="url(#auroraGlow)" />
+
+  <!-- Inner liquid-glass medallion -->
+  <circle cx="512" cy="512" r="244" fill="url(#innerDisc)" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="3" />
+
+  <!-- Base ring track -->
+  <circle cx="512" cy="512" r="292" stroke="#141923" stroke-width="58" />
+  <circle cx="512" cy="512" r="292" stroke="url(#trackGrad)" stroke-width="58" />
+
+  <!-- Glowing primary cadence arc (276° dynamic sweep) -->
   <path
-    d="M256 98 A158 158 0 1 1 118 334"
-    stroke="#34D399"
-    stroke-width="26"
+    d="M 512 220 A 292 292 0 1 1 236 608"
+    stroke="url(#ringGrad)"
+    stroke-width="58"
     stroke-linecap="round"
+    opacity="0.34"
+    filter="url(#arcGlow)"
   />
   <path
-    d="M158 262 L210 262 L232 204 L264 316 L290 242 L312 262 L354 262"
-    stroke="#F3F5F7"
-    stroke-width="22"
+    d="M 512 220 A 292 292 0 1 1 236 608"
+    stroke="url(#ringGrad)"
+    stroke-width="54"
+    stroke-linecap="round"
+  />
+  <!-- Specular inner ridge highlight on arc -->
+  <path
+    d="M 512 204 A 308 308 0 0 1 784 366"
+    stroke="url(#ringHighlight)"
+    stroke-width="8"
+    stroke-linecap="round"
+  />
+
+  <!-- Leading vitality spark dot -->
+  <circle cx="512" cy="220" r="16" fill="#E8FFF0" filter="url(#dotGlow)" />
+  <circle cx="512" cy="220" r="9" fill="#FFFFFF" />
+
+  <!-- Sculpted fluid cadence heartbeat wave -->
+  <path
+    d="M 314 524 L 386 524 C 402 524 410 518 418 498 L 456 394 C 462 378 478 378 483 395 L 533 626 C 538 644 554 644 560 627 L 598 496 C 605 474 619 472 630 492 L 642 512 C 649 522 657 524 670 524 L 710 524"
+    stroke="#5CE17C"
+    stroke-opacity="0.42"
+    stroke-width="40"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#pulseGlow)"
+  />
+  <path
+    d="M 314 524 L 386 524 C 402 524 410 518 418 498 L 456 394 C 462 378 478 378 483 395 L 533 626 C 538 644 554 644 560 627 L 598 496 C 605 474 619 472 630 492 L 642 512 C 649 522 657 524 670 524 L 710 524"
+    stroke="url(#pulseGrad)"
+    stroke-width="34"
     stroke-linecap="round"
     stroke-linejoin="round"
   />

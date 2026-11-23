@@ -112,14 +112,19 @@ jobs:
           ## ⬇️ Download & Installation auf Android
           1. Lade unten unter **Assets** die Datei **\`${APK_NAME}\`** direkt auf dein Android-Smartphone herunter (Android 8.0 / API 26 oder neuer).
           2. Tippe auf die heruntergeladene APK-Datei und erlaube bei Bedarf einmalig die Installation aus dieser Quelle.
-          3. Verbinde nach dem Start unter **Mehr → Datenquellen & Uhren** **Android Health Connect**, um echte Daten deiner Smartwatch (Garmin, COROS, Polar, Samsung Health, Fitbit, Oura, Withings, Suunto u. a.) lokal abzugleichen.
+          3. Öffne **Mehr → Datenquellen & Uhren**, verbinde **Android Health Connect** und aktiviere **Dauerhaften Hintergrund-Abgleich (15 Min.)** sowie **Akku-Optimierung deaktivieren**, damit deine Daten dauerhaft automatisch synchronisiert werden.
 
-          ## 🤖 Native Android-Systemintegrationen
-          - **Android Health Connect (Jetpack \`connect-client:1.1.0\`)**: Echter lokaler Lese-Abgleich für Schritte, aktive & gesamte Kalorien, Schlaf inkl. Schlafphasen (Wach, Leicht, Tief, REM), HRV (RMSSD), Ruhepuls, Trainings inkl. Herzfrequenz & Distanz, Gewicht, Körperfett, VO₂max, SpO₂, Atemfrequenz und Wasser + optionaler Schreib-Abgleich für Mahlzeiten, Wasser und Gewicht sowie verpflichtende lokale Datenschutz-Erklärung (\`PermissionsRationaleActivity\`).
-          - **Android Share-Target (\`ACTION_SEND\`) & Deep-Links (\`caltrack://\`, \`kadenz://\`)**: Teile Mahlzeiten-Analysen direkt aus Gemini, ChatGPT oder Claude über das Android-Teilen-Menü an KADENZ (Kaltstart & laufende App).
-          - **Universeller Offline-Barcode-Scanner**: Native Android-Kameraberechtigung + \`BarcodeDetector\` mit **\`@zxing/browser\` Offline-Fallback** für EAN-8, EAN-13, UPC-A, UPC-E & Code-128 auf jedem Android-Handy (auch ohne Google Play Services).
-          - **Launcher App-Shortcuts**: Langer Druck auf das App-Icon für Direktzugriff auf *Mahlzeit erfassen* und *Schlaf ansehen*.
-          - **Native System-Integrationen**: Android \`ClipboardManager\`, native Haptik (\`VibratorManager\` / \`VibrationEffect\`), nativer JSON-Backup-Export über \`FileProvider\` & Android-Teilen-Sheet, Edge-to-Edge \`WindowInsets\` & System-Bar-Kontrast, Hardware-/Gesten-Zurück-Navigation sowie \`WorkManager\` Hintergrund-Abgleich.
+          ## ✨ Highlights & Native Android-Integrationen
+          - **Neues modernes App-Icon**: Obsidian-Liquid-Glass-Design mit leuchtendem Vitalitäts-Ring, adaptivem Android-Icon und nativem **Android 13+ Material You Monochrome Themed Icon**.
+          - **Dauerhafte 15-Minuten-Hintergrund-Synchronisation**: Echter nativer Android-\`WorkManager\`-Sync (\`READ_HEALTH_DATA_IN_BACKGROUND\`), 90-Tage-Verlauf (\`READ_HEALTH_DATA_HISTORY\`), automatischer Neustart nach Smartphone-Reboot & App-Update (\`BootCompletedReceiver\`) sowie 1-Tap-Freigabe gegen Android Doze/Akku-Drosselung.
+          - **COROS-Uhr & Sportuhren (100 % kostenlos & lokal)**: Direkter COROS-Einrichtungsassistent (1-Tap *COROS App öffnen* → Health Connect), automatische Nacht-Ruhepuls-Ableitung aus der Herzfrequenz-Zeitreihe sowie nativer binärer **\`.FIT\`-, \`.GPX\`- und \`.TCX\`-Import** direkt aus der COROS-App.
+          - **Vollständige Gesundheitsdaten über Android Health Connect (Jetpack \`connect-client:1.1.0\`)**:
+            - **Schlaf & Schlafphasen** (Wach, Leicht, Tief, REM inkl. automatischer Zusammenführung geteilter Nächte)
+            - **Erholung & Herz**: HRV (RMSSD), Ruhepuls (gemessen + nächtliche 10.-Perzentil-Ableitung), kontinuierliche Trainings-Herzfrequenz-Zeitreihen
+            - **Trainings & Aktivität**: Sessions inkl. Distanz, Höhenmeter (\`ElevationGained\`), Schrittfrequenz/Kadenz (\`StepsCadence\`), Schritte, aktive & gesamte Kalorien
+            - **Vitalwerte & Körper**: VO₂max, Blutsauerstoff (SpO₂), Atemfrequenz, Haut- & Basaltemperatur, Gewicht, Körperfett, Muskelmasse (\`LeanBodyMass\`)
+            - **Ernährung & Flüssigkeit**: Wasseraufnahme (\`Hydration\`) & externe Mahlzeiten (\`Nutrition\` ohne Selbst-Duplikate) + optionaler Schreib-Abgleich zurück an Health Connect
+          - **System-Komfort**: Android Share-Target (\`ACTION_SEND\`) & Deep-Links (\`caltrack://\`, \`kadenz://\`), Offline-Barcode-Scanner (\`BarcodeDetector\` + \`@zxing/browser\`), Launcher App-Shortcuts, native Haptik, \`FileProvider\` JSON-Backup, Edge-to-Edge \`WindowInsets\` & Hardware-Zurück-Navigation.
 
           ## 🔐 Integrität & Signatur
           - **Paketname**: \`io.github.mixxermannipro.openhealth\`

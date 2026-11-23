@@ -5,28 +5,14 @@ import android.net.Uri
 import android.os.Build
 import androidx.activity.result.ActivityResultLauncher
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
-import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
-import androidx.health.connect.client.records.BodyFatRecord
-import androidx.health.connect.client.records.DistanceRecord
-import androidx.health.connect.client.records.ExerciseSessionRecord
-import androidx.health.connect.client.records.HeartRateRecord
-import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.records.MealType
 import androidx.health.connect.client.records.NutritionRecord
-import androidx.health.connect.client.records.OxygenSaturationRecord
-import androidx.health.connect.client.records.RespiratoryRateRecord
-import androidx.health.connect.client.records.RestingHeartRateRecord
-import androidx.health.connect.client.records.SleepSessionRecord
-import androidx.health.connect.client.records.StepsRecord
-import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
-import androidx.health.connect.client.records.Vo2MaxRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Metadata
-import androidx.health.connect.client.request.ReadRecordsRequest
-import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
 import androidx.health.connect.client.units.Volume
@@ -42,12 +28,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 @CapacitorPlugin(name = "HealthConnect")
 class HealthConnectPlugin : Plugin() {
@@ -56,32 +38,8 @@ class HealthConnectPlugin : Plugin() {
     private var permissionLauncher: ActivityResultLauncher<Set<String>>? = null
     private var pendingPermissionCall: PluginCall? = null
 
-    private val readPermissions: Set<String> = setOf(
-        HealthPermission.getReadPermission(StepsRecord::class),
-        HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(RestingHeartRateRecord::class),
-        HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
-        HealthPermission.getReadPermission(SleepSessionRecord::class),
-        HealthPermission.getReadPermission(ExerciseSessionRecord::class),
-        HealthPermission.getReadPermission(DistanceRecord::class),
-        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
-        HealthPermission.getReadPermission(WeightRecord::class),
-        HealthPermission.getReadPermission(BodyFatRecord::class),
-        HealthPermission.getReadPermission(Vo2MaxRecord::class),
-        HealthPermission.getReadPermission(OxygenSaturationRecord::class),
-        HealthPermission.getReadPermission(RespiratoryRateRecord::class),
-        HealthPermission.getReadPermission(HydrationRecord::class),
-        HealthPermission.getReadPermission(NutritionRecord::class)
-    )
-
-    private val writePermissions: Set<String> = setOf(
-        HealthPermission.getWritePermission(WeightRecord::class),
-        HealthPermission.getWritePermission(HydrationRecord::class),
-        HealthPermission.getWritePermission(NutritionRecord::class)
-    )
-
-    private val allPermissions: Set<String> = readPermissions + writePermissions
+    private val readPermissions: Set<String> = HealthConnectSyncEngine.readRecordPermissions
+    private val writePermissions: Set<String> = HealthConnectSyncEngine.writeRecordPermissions
 
     override fun load() {
         super.load()
@@ -91,7 +49,12 @@ class HealthConnectPlugin : Plugin() {
                 val call = pendingPermissionCall
                 pendingPermissionCall = null
                 if (call != null) {
-                    call.resolve(buildPermissionPayload(granted))
+                    pluginScope.launch {
+                        if (granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)) {
+                            HealthSyncScheduler.ensureScheduled(context, true)
+                        }
+                        call.resolve(buildPermissionPayload(granted))
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -114,20 +77,53 @@ class HealthConnectPlugin : Plugin() {
         }
     }
 
+    private fun isFeatureAvailable(client: HealthConnectClient, feature: Int): Boolean {
+        return try {
+            client.features.getFeatureStatus(feature) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun buildPermissionPayload(granted: Set<String>): JSObject {
         val grantedArray = JSArray()
         granted.forEach { grantedArray.put(it) }
         val readGrantedCount = readPermissions.count { granted.contains(it) }
         val writeGrantedCount = writePermissions.count { granted.contains(it) }
+
+        var bgSupported = false
+        var historySupported = false
+        if (getSdkAvailability() == HealthConnectClient.SDK_AVAILABLE) {
+            try {
+                val client = HealthConnectClient.getOrCreate(context)
+                bgSupported = isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+                historySupported = isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY)
+            } catch (_: Exception) {
+                // ignore
+            }
+        }
+
+        val bgGranted = granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+        val historyGranted = granted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+        val bgTelemetry = HealthConnectSyncEngine.getBackgroundSyncTelemetry(context)
+
         return JSObject().apply {
             put("granted", grantedArray)
             put("grantedCount", granted.size)
             put("readGrantedCount", readGrantedCount)
             put("writeGrantedCount", writeGrantedCount)
-            put("totalCount", allPermissions.size)
+            put("totalCount", readPermissions.size + writePermissions.size)
             put("hasReadAccess", readGrantedCount > 0)
             put("hasWriteAccess", writeGrantedCount > 0)
             put("allGranted", granted.containsAll(readPermissions))
+            put("backgroundReadSupported", bgSupported)
+            put("backgroundReadGranted", bgGranted)
+            put("historyReadSupported", historySupported)
+            put("historyReadGranted", historyGranted)
+            put("lastBackgroundSyncAt", bgTelemetry.optString("lastBackgroundSyncAt", ""))
+            put("lastBackgroundSyncStatus", bgTelemetry.optString("lastBackgroundSyncStatus", "idle"))
+            put("lastBackgroundSyncRecords", bgTelemetry.optInt("lastBackgroundSyncRecords", 0))
+            put("hasPendingBackgroundSnapshot", bgTelemetry.optBoolean("hasPendingSnapshot", false))
         }
     }
 
@@ -183,16 +179,31 @@ class HealthConnectPlugin : Plugin() {
         }
 
         val includeWrite = call.getBoolean("includeWrite", true) ?: true
-        val requested = if (includeWrite) allPermissions else readPermissions
+        val includeBackground = call.getBoolean("includeBackground", true) ?: true
+        val includeHistory = call.getBoolean("includeHistory", true) ?: true
 
         pluginScope.launch {
             try {
                 val client = HealthConnectClient.getOrCreate(context)
+                val requested = mutableSetOf<String>()
+                requested.addAll(readPermissions)
+                if (includeWrite) requested.addAll(writePermissions)
+                if (includeBackground && isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)) {
+                    requested.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+                }
+                if (includeHistory && isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY)) {
+                    requested.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+                }
+
                 val alreadyGranted = client.permissionController.getGrantedPermissions()
                 if (alreadyGranted.containsAll(requested)) {
+                    if (alreadyGranted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)) {
+                        HealthSyncScheduler.ensureScheduled(context, true)
+                    }
                     call.resolve(buildPermissionPayload(alreadyGranted))
                     return@launch
                 }
+
                 pendingPermissionCall = call
                 activity.runOnUiThread {
                     try {
@@ -204,6 +215,46 @@ class HealthConnectPlugin : Plugin() {
                 }
             } catch (e: Exception) {
                 call.reject("Health Connect permission error: ${e.message}", e)
+            }
+        }
+    }
+
+    @PluginMethod
+    fun requestBackgroundPermission(call: PluginCall) {
+        if (getSdkAvailability() != HealthConnectClient.SDK_AVAILABLE) {
+            call.reject("HEALTH_CONNECT_UNAVAILABLE")
+            return
+        }
+        val launcher = permissionLauncher ?: return call.reject("HEALTH_CONNECT_LAUNCHER_UNAVAILABLE")
+        pluginScope.launch {
+            try {
+                val client = HealthConnectClient.getOrCreate(context)
+                val requested = mutableSetOf<String>()
+                if (isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)) {
+                    requested.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
+                }
+                if (isFeatureAvailable(client, HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY)) {
+                    requested.add(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+                }
+                val alreadyGranted = client.permissionController.getGrantedPermissions()
+                if (requested.isEmpty() || alreadyGranted.containsAll(requested)) {
+                    if (alreadyGranted.contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)) {
+                        HealthSyncScheduler.ensureScheduled(context, true)
+                    }
+                    call.resolve(buildPermissionPayload(alreadyGranted))
+                    return@launch
+                }
+                pendingPermissionCall = call
+                activity.runOnUiThread {
+                    try {
+                        launcher.launch(requested)
+                    } catch (e: Exception) {
+                        pendingPermissionCall = null
+                        call.reject("Could not launch background permission UI: ${e.message}", e)
+                    }
+                }
+            } catch (e: Exception) {
+                call.reject("Background permission error: ${e.message}", e)
             }
         }
     }
@@ -238,363 +289,41 @@ class HealthConnectPlugin : Plugin() {
             call.reject("HEALTH_CONNECT_UNAVAILABLE")
             return
         }
-
         val daysBack = (call.getInt("daysBack", 30) ?: 30).coerceIn(1, 180)
-
         pluginScope.launch {
             try {
-                val client = HealthConnectClient.getOrCreate(context)
-                val granted = client.permissionController.getGrantedPermissions()
-
-                val zone = ZoneId.systemDefault()
-                val now = Instant.now()
-                val startInstant = LocalDate.now(zone)
-                    .minusDays(daysBack.toLong())
-                    .atStartOfDay(zone)
-                    .toInstant()
-                val range = TimeRangeFilter.between(startInstant, now)
-
-                suspend fun <T : androidx.health.connect.client.records.Record> safeRead(
-                    recordClass: kotlin.reflect.KClass<T>
-                ): List<T> {
-                    val perm = HealthPermission.getReadPermission(recordClass)
-                    if (!granted.contains(perm)) return emptyList()
-                    return try {
-                        val all = mutableListOf<T>()
-                        var pageToken: String? = null
-                        do {
-                            val response = client.readRecords(
-                                ReadRecordsRequest(
-                                    recordType = recordClass,
-                                    timeRangeFilter = range,
-                                    pageToken = pageToken
-                                )
-                            )
-                            all.addAll(response.records)
-                            pageToken = response.pageToken
-                        } while (pageToken != null && all.size < 5000)
-                        all
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
-                }
-
-                val stepsRecords = safeRead(StepsRecord::class)
-                val activeCalRecords = safeRead(ActiveCaloriesBurnedRecord::class)
-                val totalCalRecords = safeRead(TotalCaloriesBurnedRecord::class)
-                val sleepRecords = safeRead(SleepSessionRecord::class)
-                val hrvRecords = safeRead(HeartRateVariabilityRmssdRecord::class)
-                val rhrRecords = safeRead(RestingHeartRateRecord::class)
-                val exerciseRecords = safeRead(ExerciseSessionRecord::class)
-                val hrRecords = safeRead(HeartRateRecord::class)
-                val distanceRecords = safeRead(DistanceRecord::class)
-                val weightRecords = safeRead(WeightRecord::class)
-                val bodyFatRecords = safeRead(BodyFatRecord::class)
-                val vo2Records = safeRead(Vo2MaxRecord::class)
-                val spo2Records = safeRead(OxygenSaturationRecord::class)
-                val respRecords = safeRead(RespiratoryRateRecord::class)
-                val hydrationRecords = safeRead(HydrationRecord::class)
-
-                // 1. HRV Observations (daily latest/average)
-                val hrvByDate = hrvRecords.groupBy { toLocalDateKey(it.time, zone) }
-                val hrvArray = JSArray()
-                for ((dateKey, list) in hrvByDate) {
-                    val valid = list.filter { it.heartRateVariabilityMillis in 5.0..300.0 }
-                    if (valid.isEmpty()) continue
-                    val avg = valid.map { it.heartRateVariabilityMillis }.average()
-                    val latest = valid.maxBy { it.time }
-                    val provider = mapPackageToProvider(latest.metadata.dataOrigin.packageName)
-                    hrvArray.put(JSObject().apply {
-                        put("id", "hc_hrv_${dateKey}_${provider}")
-                        put("date", dateKey)
-                        put("timestamp", latest.time.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_hrv_${latest.metadata.id}")
-                        put("value", (avg * 10.0).roundToInt() / 10.0)
-                    })
-                }
-
-                // 2. Resting Heart Rate Observations (daily minimum/average)
-                val rhrByDate = rhrRecords.groupBy { toLocalDateKey(it.time, zone) }
-                val rhrArray = JSArray()
-                for ((dateKey, list) in rhrByDate) {
-                    val valid = list.filter { it.beatsPerMinute in 28..140 }
-                    if (valid.isEmpty()) continue
-                    val minBpm = valid.minOf { it.beatsPerMinute }
-                    val latest = valid.maxBy { it.time }
-                    val provider = mapPackageToProvider(latest.metadata.dataOrigin.packageName)
-                    rhrArray.put(JSObject().apply {
-                        put("id", "hc_rhr_${dateKey}_${provider}")
-                        put("date", dateKey)
-                        put("timestamp", latest.time.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_rhr_${latest.metadata.id}")
-                        put("value", minBpm)
-                    })
-                }
-
-                // 3. Sleep Sessions (with stages!)
-                val sleepArray = JSArray()
-                for (session in sleepRecords) {
-                    val timeInBedMin = max(
-                        1,
-                        ((session.endTime.toEpochMilli() - session.startTime.toEpochMilli()) / 60000L).toInt()
-                    )
-                    if (timeInBedMin < 20) continue
-                    val wakeDateKey = toLocalDateKey(session.endTime, zone)
-                    val provider = mapPackageToProvider(session.metadata.dataOrigin.packageName)
-
-                    var awakeMin = 0
-                    var lightMin = 0
-                    var deepMin = 0
-                    var remMin = 0
-                    var awakenings = 0
-                    val stagesArray = JSArray()
-
-                    for (st in session.stages) {
-                        val durMin = max(
-                            1,
-                            ((st.endTime.toEpochMilli() - st.startTime.toEpochMilli()) / 60000L).toInt()
-                        )
-                        val offsetMin = max(
-                            0,
-                            ((st.startTime.toEpochMilli() - session.startTime.toEpochMilli()) / 60000L).toInt()
-                        )
-                        val stageName = when (st.stage) {
-                            SleepSessionRecord.STAGE_TYPE_AWAKE,
-                            SleepSessionRecord.STAGE_TYPE_AWAKE_IN_BED,
-                            SleepSessionRecord.STAGE_TYPE_OUT_OF_BED -> {
-                                awakeMin += durMin
-                                awakenings += 1
-                                "awake"
-                            }
-                            SleepSessionRecord.STAGE_TYPE_DEEP -> {
-                                deepMin += durMin
-                                "deep"
-                            }
-                            SleepSessionRecord.STAGE_TYPE_REM -> {
-                                remMin += durMin
-                                "rem"
-                            }
-                            else -> {
-                                lightMin += durMin
-                                "light"
-                            }
-                        }
-                        stagesArray.put(JSObject().apply {
-                            put("stage", stageName)
-                            put("startOffsetMinutes", offsetMin)
-                            put("durationMinutes", durMin)
-                        })
-                    }
-
-                    val hasStageData = session.stages.isNotEmpty() && (deepMin > 0 || remMin > 0 || lightMin > 0)
-                    val totalSleepMin = if (hasStageData) {
-                        max(1, lightMin + deepMin + remMin)
-                    } else {
-                        max(1, timeInBedMin - awakeMin)
-                    }
-                    val efficiencyPct = ((totalSleepMin.toDouble() / timeInBedMin.toDouble()) * 100.0)
-                        .roundToInt()
-                        .coerceIn(50, 100)
-
-                    sleepArray.put(JSObject().apply {
-                        put("id", "hc_sleep_${session.metadata.id}")
-                        put("date", wakeDateKey)
-                        put("timestamp", session.endTime.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_sleep_${session.metadata.id}")
-                        put("bedtimeIso", session.startTime.toString())
-                        put("wakeTimeIso", session.endTime.toString())
-                        put("timeInBedMinutes", timeInBedMin)
-                        put("totalSleepMinutes", totalSleepMin)
-                        put("awakeMinutes", awakeMin)
-                        if (hasStageData) {
-                            put("lightMinutes", lightMin)
-                            put("deepMinutes", deepMin)
-                            put("remMinutes", remMin)
-                        }
-                        put("hasStageData", hasStageData)
-                        put("efficiencyPercent", efficiencyPct)
-                        put("awakeningsCount", awakenings)
-                        put("stages", stagesArray)
-                    })
-                }
-
-                // 4. Workouts / Exercise Sessions (enriched with HR, Distance, Calories)
-                val workoutArray = JSArray()
-                for (ex in exerciseRecords) {
-                    val durMin = max(
-                        1,
-                        ((ex.endTime.toEpochMilli() - ex.startTime.toEpochMilli()) / 60000L).toInt()
-                    )
-                    val dateKey = toLocalDateKey(ex.startTime, zone)
-                    val provider = mapPackageToProvider(ex.metadata.dataOrigin.packageName)
-                    val sport = mapExerciseType(ex.exerciseType)
-
-                    val overlappingHr = hrRecords
-                        .filter { it.endTime >= ex.startTime && it.startTime <= ex.endTime }
-                        .flatMap { it.samples }
-                        .filter { it.time >= ex.startTime && it.time <= ex.endTime }
-                        .map { it.beatsPerMinute.toInt() }
-                        .filter { it in 35..230 }
-
-                    val avgHr = if (overlappingHr.isNotEmpty()) overlappingHr.average().roundToInt() else null
-                    val maxHr = overlappingHr.maxOrNull()
-
-                    val distKm = distanceRecords
-                        .filter { it.endTime > ex.startTime && it.startTime < ex.endTime }
-                        .sumOf { it.distance.inKilometers }
-
-                    val kcal = activeCalRecords
-                        .filter { it.endTime > ex.startTime && it.startTime < ex.endTime }
-                        .sumOf { it.energy.inKilocalories }
-                        .takeIf { it > 5.0 }
-                        ?: totalCalRecords
-                            .filter { it.endTime > ex.startTime && it.startTime < ex.endTime }
-                            .sumOf { it.energy.inKilocalories }
-                            .takeIf { it > 5.0 }
-
-                    workoutArray.put(JSObject().apply {
-                        put("id", "hc_wk_${ex.metadata.id}")
-                        put("date", dateKey)
-                        put("timestamp", ex.startTime.toString())
-                        put("startTimeIso", ex.startTime.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_wk_${ex.metadata.id}")
-                        put("title", ex.title?.takeIf { it.isNotBlank() } ?: defaultSportTitle(sport))
-                        put("sport", sport)
-                        put("durationMinutes", durMin)
-                        if (distKm > 0.05) {
-                            put("distanceKm", (distKm * 100.0).roundToInt() / 100.0)
-                        }
-                        if (avgHr != null) put("avgHrBpm", avgHr)
-                        if (maxHr != null) put("maxHrBpm", maxHr)
-                        if (kcal != null) put("caloriesKcal", kcal.roundToInt())
-                    })
-                }
-
-                // 5. Daily Activities (Steps, Active/Total Calories, VO2max, SpO2, Respiratory Rate)
-                val allActivityDates = mutableSetOf<String>()
-                stepsRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
-                activeCalRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
-                totalCalRecords.forEach { allActivityDates.add(toLocalDateKey(it.startTime, zone)) }
-                vo2Records.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
-                spo2Records.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
-                respRecords.forEach { allActivityDates.add(toLocalDateKey(it.time, zone)) }
-
-                val activityArray = JSArray()
-                for (dateKey in allActivityDates) {
-                    val dayStepsList = stepsRecords.filter { toLocalDateKey(it.startTime, zone) == dateKey }
-                    // Avoid double counting steps across multiple apps writing to Health Connect by taking max per source
-                    val stepsByOrigin = dayStepsList.groupBy { it.metadata.dataOrigin.packageName }
-                        .mapValues { (_, recs) -> recs.sumOf { it.count } }
-                    val bestOriginEntry = stepsByOrigin.maxByOrNull { it.value }
-                    val steps = bestOriginEntry?.value?.toInt() ?: 0
-                    val provider = mapPackageToProvider(bestOriginEntry?.key ?: "")
-
-                    val dayActiveCals = activeCalRecords
-                        .filter { toLocalDateKey(it.startTime, zone) == dateKey }
-                        .groupBy { it.metadata.dataOrigin.packageName }
-                        .values
-                        .maxOfOrNull { list -> list.sumOf { it.energy.inKilocalories } }
-                        ?.roundToInt()
-
-                    val dayTotalCals = totalCalRecords
-                        .filter { toLocalDateKey(it.startTime, zone) == dateKey }
-                        .groupBy { it.metadata.dataOrigin.packageName }
-                        .values
-                        .maxOfOrNull { list -> list.sumOf { it.energy.inKilocalories } }
-                        ?.roundToInt()
-
-                    val dayVo2 = vo2Records
-                        .filter { toLocalDateKey(it.time, zone) == dateKey }
-                        .maxByOrNull { it.time }
-                        ?.vo2MillilitersPerMinuteKilogram
-
-                    val daySpo2 = spo2Records
-                        .filter { toLocalDateKey(it.time, zone) == dateKey }
-                        .map { it.percentage.value }
-                        .takeIf { it.isNotEmpty() }
-                        ?.average()
-
-                    val dayResp = respRecords
-                        .filter { toLocalDateKey(it.time, zone) == dateKey }
-                        .map { it.rate }
-                        .takeIf { it.isNotEmpty() }
-                        ?.average()
-
-                    val dayExerciseMinutes = exerciseRecords
-                        .filter { toLocalDateKey(it.startTime, zone) == dateKey }
-                        .sumOf { max(1L, (it.endTime.toEpochMilli() - it.startTime.toEpochMilli()) / 60000L).toInt() }
-                    val activeMinutes = max(dayExerciseMinutes, steps / 130)
-
-                    activityArray.put(JSObject().apply {
-                        put("id", "hc_act_${dateKey}")
-                        put("date", dateKey)
-                        put("timestamp", now.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_act_${dateKey}")
-                        put("steps", steps)
-                        put("activeMinutes", activeMinutes)
-                        put("estimatedEnergyKcal", dayTotalCals ?: ((dayActiveCals ?: 0) + 1750))
-                        if (dayActiveCals != null) put("activeCaloriesKcal", dayActiveCals)
-                        if (dayVo2 != null) put("vo2MaxEstimate", (dayVo2 * 10.0).roundToInt() / 10.0)
-                        if (daySpo2 != null) put("spo2Percent", (daySpo2 * 10.0).roundToInt() / 10.0)
-                        if (dayResp != null) put("respiratoryRateBpm", (dayResp * 10.0).roundToInt() / 10.0)
-                    })
-                }
-
-                // 6. Body Measurements (Weight & Body Fat)
-                val bodyDates = (weightRecords.map { toLocalDateKey(it.time, zone) } +
-                    bodyFatRecords.map { toLocalDateKey(it.time, zone) }).toSet()
-                val bodyArray = JSArray()
-                for (dateKey in bodyDates) {
-                    val w = weightRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
-                    val bf = bodyFatRecords.filter { toLocalDateKey(it.time, zone) == dateKey }.maxByOrNull { it.time }
-                    if (w == null) continue
-                    val provider = mapPackageToProvider(w.metadata.dataOrigin.packageName)
-                    bodyArray.put(JSObject().apply {
-                        put("id", "hc_body_${dateKey}")
-                        put("date", dateKey)
-                        put("timestamp", w.time.toString())
-                        put("sourceProvider", provider)
-                        put("sourceRecordId", "hc_body_${w.metadata.id}")
-                        put("weightKg", (w.weight.inKilograms * 10.0).roundToInt() / 10.0)
-                        if (bf != null) {
-                            put("bodyFatPercent", (bf.percentage.value * 10.0).roundToInt() / 10.0)
-                        }
-                    })
-                }
-
-                // 7. Hydration (daily total ml)
-                val hydrationByDate = hydrationRecords.groupBy { toLocalDateKey(it.startTime, zone) }
-                val hydrationArray = JSArray()
-                for ((dateKey, recs) in hydrationByDate) {
-                    val totalMl = recs.sumOf { it.volume.inMilliliters }.roundToInt()
-                    if (totalMl <= 0) continue
-                    hydrationArray.put(JSObject().apply {
-                        put("date", dateKey)
-                        put("ml", totalMl)
-                        put("updatedAt", now.toString())
-                    })
-                }
-
-                call.resolve(JSObject().apply {
-                    put("syncedAt", now.toString())
-                    put("grantedCount", granted.size)
-                    put("hrvObservations", hrvArray)
-                    put("rhrObservations", rhrArray)
-                    put("sleepSessions", sleepArray)
-                    put("workouts", workoutArray)
-                    put("dailyActivities", activityArray)
-                    put("bodyMeasurements", bodyArray)
-                    put("hydrationEntries", hydrationArray)
-                })
+                val snapshot = HealthConnectSyncEngine.readSnapshot(context, daysBack)
+                // Clear any stale background snapshot now that we have a fresher live snapshot
+                HealthConnectSyncEngine.consumeBackgroundSnapshot(context)
+                call.resolve(JSObject.fromJSONObject(snapshot))
             } catch (e: Exception) {
                 call.reject("Health Connect sync failed: ${e.message}", e)
             }
         }
+    }
+
+    @PluginMethod
+    fun consumeBackgroundSnapshot(call: PluginCall) {
+        pluginScope.launch {
+            try {
+                val snapshot = HealthConnectSyncEngine.consumeBackgroundSnapshot(context)
+                if (snapshot != null) {
+                    val result = JSObject.fromJSONObject(snapshot)
+                    result.put("hasSnapshot", true)
+                    call.resolve(result)
+                } else {
+                    call.resolve(JSObject().apply { put("hasSnapshot", false) })
+                }
+            } catch (e: Exception) {
+                call.resolve(JSObject().apply { put("hasSnapshot", false) })
+            }
+        }
+    }
+
+    @PluginMethod
+    fun triggerImmediateBackgroundSync(call: PluginCall) {
+        HealthSyncScheduler.triggerImmediateRun(context)
+        call.resolve(JSObject().apply { put("scheduled", true) })
     }
 
     @PluginMethod
@@ -713,62 +442,6 @@ class HealthConnectPlugin : Plugin() {
             } catch (_: Exception) {
                 call.resolve(JSObject().apply { put("written", false) })
             }
-        }
-    }
-
-    private fun toLocalDateKey(instant: Instant, zone: ZoneId): String {
-        return instant.atZone(zone).toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
-    }
-
-    private fun mapPackageToProvider(pkg: String): String {
-        val lower = pkg.lowercase()
-        return when {
-            lower.contains("garmin") -> "garmin"
-            lower.contains("coros") -> "coros"
-            lower.contains("polar") -> "polar"
-            lower.contains("suunto") -> "suunto"
-            lower.contains("shealth") || lower.contains("samsung") -> "samsung_health"
-            lower.contains("fitbit") -> "fitbit"
-            lower.contains("huami") || lower.contains("zepp") || lower.contains("amazfit") -> "amazfit"
-            lower.contains("withings") -> "withings"
-            lower.contains("oura") -> "oura"
-            else -> "health_connect"
-        }
-    }
-
-    private fun mapExerciseType(type: Int): String {
-        return when (type) {
-            ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
-            ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL -> "running"
-            ExerciseSessionRecord.EXERCISE_TYPE_WALKING -> "walking"
-            ExerciseSessionRecord.EXERCISE_TYPE_BIKING,
-            ExerciseSessionRecord.EXERCISE_TYPE_BIKING_STATIONARY -> "cycling"
-            ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING,
-            ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING -> "strength"
-            ExerciseSessionRecord.EXERCISE_TYPE_CALISTHENICS,
-            ExerciseSessionRecord.EXERCISE_TYPE_BOOT_CAMP,
-            ExerciseSessionRecord.EXERCISE_TYPE_HIGH_INTENSITY_INTERVAL_TRAINING -> "calisthenics"
-            ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_OPEN_WATER,
-            ExerciseSessionRecord.EXERCISE_TYPE_SWIMMING_POOL -> "swimming"
-            ExerciseSessionRecord.EXERCISE_TYPE_HIKING -> "hiking"
-            ExerciseSessionRecord.EXERCISE_TYPE_FOOTBALL_AMERICAN,
-            ExerciseSessionRecord.EXERCISE_TYPE_FOOTBALL_AUSTRALIAN,
-            ExerciseSessionRecord.EXERCISE_TYPE_SOCCER -> "football"
-            else -> "other"
-        }
-    }
-
-    private fun defaultSportTitle(sport: String): String {
-        return when (sport) {
-            "running" -> "Lauf"
-            "walking" -> "Spaziergang"
-            "cycling" -> "Radfahrt"
-            "strength" -> "Krafttraining"
-            "calisthenics" -> "Eigengewicht-Training"
-            "swimming" -> "Schwimmen"
-            "hiking" -> "Wanderung"
-            "football" -> "Fußball"
-            else -> "Training"
         }
     }
 }
