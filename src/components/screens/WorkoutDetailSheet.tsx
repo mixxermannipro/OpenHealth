@@ -1,4 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Trash2 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { BottomSheet } from '../ui/BottomSheet';
 import { WorkoutSession } from '../../types/health';
 import { useHealthStore } from '../../store/useHealthStore';
@@ -12,14 +14,34 @@ import {
 } from '../../utils/formatters';
 import { WorkoutPaceHRChart } from '../charts/WorkoutPaceHRChart';
 import { HRZonesChart } from '../charts/HRZonesChart';
+import { haptics } from '../../utils/haptics';
 
 interface WorkoutDetailSheetProps {
   workout: WorkoutSession | null;
   onClose: () => void;
 }
 
+function formatDurationMmSs(minutes: number): string {
+  const whole = Math.floor(Math.max(0, minutes));
+  const secs = Math.round((Math.max(0, minutes) - whole) * 60);
+  if (secs === 60) return `${whole + 1}:00 Min.`;
+  return `${whole}:${String(secs).padStart(2, '0')} Min.`;
+}
+
 export const WorkoutDetailSheet: React.FC<WorkoutDetailSheetProps> = ({ workout, onClose }) => {
-  const { profile, workouts } = useHealthStore();
+  const { profile, workouts, deleteWorkout } = useHealthStore(
+    useShallow((s) => ({
+      profile: s.profile,
+      workouts: s.workouts,
+      deleteWorkout: s.deleteWorkout,
+    }))
+  );
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+  }, [workout?.id]);
+
   const zones = useMemo(
     () => getHRZones(profile, profile.restingHrBaselineManual ?? 55),
     [profile]
@@ -69,7 +91,7 @@ export const WorkoutDetailSheet: React.FC<WorkoutDetailSheetProps> = ({ workout,
             <div>
               <div className="text-[11px] text-[var(--text-muted)]">Dauer</div>
               <div className="mt-0.5 text-base font-semibold tabular-nums">
-                {workout.durationMinutes}:00 Min.
+                {formatDurationMmSs(workout.durationMinutes)}
               </div>
             </div>
             {workout.avgPaceSecPerKm !== undefined && (
@@ -217,12 +239,51 @@ export const WorkoutDetailSheet: React.FC<WorkoutDetailSheetProps> = ({ workout,
                 Vergleich mit vorheriger Einheit ({comparablePrev.title})
               </div>
               <div className="text-[var(--text-secondary)] font-mono tabular-nums">
-                Dauer {comparablePrev.durationMinutes} Min.
+                Dauer {formatDurationMmSs(comparablePrev.durationMinutes)}
                 {comparablePrev.avgHrBpm ? ` · Ø Puls ${comparablePrev.avgHrBpm} /min` : ''} · Anstrengung{' '}
                 {comparablePrev.normalizedLoad}/100
               </div>
             </div>
           )}
+
+          {/* Delete Single Workout Action */}
+          <div className="pt-2 border-t border-[var(--border-hairline)] flex items-center justify-end gap-2">
+            {confirmDelete ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="min-h-[38px] rounded-full bg-[var(--bg-well)] px-3.5 text-xs font-medium text-[var(--text-secondary)]"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    haptics.light();
+                    await deleteWorkout(workout.id);
+                    onClose();
+                  }}
+                  className="min-h-[38px] rounded-full bg-[var(--accent-strain)] text-[#090A0C] px-4 text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Endgültig löschen</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  haptics.tick();
+                  setConfirmDelete(true);
+                }}
+                className="min-h-[38px] rounded-full bg-[var(--bg-well)] hover:bg-[var(--accent-strain)]/15 hover:text-[var(--accent-strain)] px-3.5 text-xs font-medium text-[var(--text-secondary)] inline-flex items-center gap-1.5 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Training löschen</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </BottomSheet>

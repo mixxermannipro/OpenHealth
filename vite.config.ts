@@ -26,11 +26,30 @@ export default defineConfig(() => {
           categories: ['health', 'fitness', 'lifestyle'],
           start_url: '/',
           scope: '/',
+          share_target: {
+            action: '/share-meal',
+            method: 'GET',
+            params: {
+              title: 'title',
+              text: 'text',
+              url: 'url',
+            },
+          },
+          protocol_handlers: [
+            {
+              protocol: 'web+caltrack',
+              url: '/?protocol=%s',
+            },
+            {
+              protocol: 'web+kadenz',
+              url: '/?protocol=%s',
+            },
+          ],
           shortcuts: [
             {
               name: 'Mahlzeit erfassen',
               short_name: 'Essen',
-              description: 'Kalorien per KI-Foto, Barcode oder Suche erfassen',
+              description: 'Kalorien per 0 € KI-Import, Barcode oder Suche erfassen',
               url: '/?tab=nutrition',
               icons: [{ src: '/pwa-192x192.png', sizes: '192x192' }],
             },
@@ -65,6 +84,7 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,jpg}'],
+          navigateFallback: '/index.html',
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           runtimeCaching: [
             {

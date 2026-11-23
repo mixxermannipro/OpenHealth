@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import {
   DailyDerivedSnapshot,
   MeasurementProvenance,
@@ -36,7 +37,7 @@ interface BiometricRow {
   provenance: MeasurementProvenance;
   sourceLabel: string;
   explanation: string;
-  seriesKey: 'hrv' | 'rhr' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp';
+  seriesKey: 'hrv' | 'rhr' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp' | 'spo2';
   infoTopic: ExplanationTopic;
   unit: string;
   color: string;
@@ -53,7 +54,19 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
     dailyActivities,
     bodyMeasurements,
     journalEntries,
-  } = useHealthStore();
+  } = useHealthStore(
+    useShallow((s) => ({
+      profile: s.profile,
+      selectedDate: s.selectedDate,
+      hrvObservations: s.hrvObservations,
+      rhrObservations: s.rhrObservations,
+      sleepSessions: s.sleepSessions,
+      workouts: s.workouts,
+      dailyActivities: s.dailyActivities,
+      bodyMeasurements: s.bodyMeasurements,
+      journalEntries: s.journalEntries,
+    }))
+  );
 
   const [healthSubTab, setHealthSubTab] = useState<'monitor' | 'healthspan' | 'trends'>('monitor');
   const [trendRange, setTrendRange] = useState<TimeRange>('30d');
@@ -72,9 +85,12 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
         profile,
         rhrObservations,
         workouts,
-        dailyActivities
+        dailyActivities,
+        hrvObservations,
+        sleepSessions,
+        false
       ),
-    [selectedDate, profile, rhrObservations, workouts, dailyActivities]
+    [selectedDate, profile, rhrObservations, workouts, dailyActivities, hrvObservations, sleepSessions]
   );
 
   const biometricRows: BiometricRow[] = useMemo(() => {
@@ -184,7 +200,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
         sourceLabel: activity && activity.spo2Percent !== undefined ? de.providers[activity.sourceProvider] : '—',
         explanation:
           'Wenn für einen Tag kein Wert vorliegt, bleibt das Feld ehrlich leer — fehlende Messwerte werden nicht erfunden.',
-        seriesKey: 'resp',
+        seriesKey: 'spo2',
         infoTopic: 'biometrics',
         unit: '%',
         color: 'var(--accent-sleep)',
@@ -224,11 +240,13 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
       } else if (activeBiometric.seriesKey === 'steps') {
         val = dailyActivities.find((a) => a.date === dk)?.steps ?? null;
       } else if (activeBiometric.seriesKey === 'sleep') {
-        val = assessSleep(dk, profile, sleepSessions).score;
+        val = assessSleep(dk, profile, sleepSessions, journalEntries).score;
       } else if (activeBiometric.seriesKey === 'weight') {
         val = bodyMeasurements.find((b) => b.date === dk)?.weightKg ?? null;
       } else if (activeBiometric.seriesKey === 'resp') {
         val = dailyActivities.find((a) => a.date === dk)?.respiratoryRateBpm ?? null;
+      } else if (activeBiometric.seriesKey === 'spo2') {
+        val = dailyActivities.find((a) => a.date === dk)?.spo2Percent ?? null;
       }
       pts.push({ date: dk, label: formatGermanShortDate(dk), value: val });
     }
@@ -241,6 +259,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
     dailyActivities,
     profile,
     sleepSessions,
+    journalEntries,
     bodyMeasurements,
   ]);
 
@@ -258,7 +277,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
         workouts,
         dailyActivities
       );
-      const slp = assessSleep(dk, profile, sleepSessions);
+      const slp = assessSleep(dk, profile, sleepSessions, journalEntries);
       const ld = assessTrainingLoad(dk, profile, workouts, base);
       const rec = assessRecovery(
         dk,

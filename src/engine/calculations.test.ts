@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {
   assessRecovery,
   assessSleep,
+  assessTrainingLoad,
   buildDailySnapshot,
   calculateWorkoutLoad,
+  computeBedtimeAndCaffeine,
+  computeHabitCorrelations,
   computePersonalBaseline,
   estimateFitnessAge,
   normalizeDailyLoadScore,
@@ -264,3 +267,191 @@ test('subjective sleep and energy feelings blend cleanly into sleep, recovery, a
   const journalFactor = snapHighFeel.recovery.factors.find((f) => f.key === 'journal');
   assert.equal(journalFactor?.weightUsed, 18);
 });
+
+test('wearable-free check-in produces honest subjective fallback recovery score when journal exists', () => {
+  const todayKey = '2026-11-22';
+  const profile = createDefaultProfile({}, todayKey);
+
+  // Without journal -> still null (no fabricated score)
+  const snapEmpty = buildDailySnapshot(todayKey, profile, [], [], [], [], [], [], []);
+  assert.equal(snapEmpty.recovery.score, null);
+  assert.equal(Boolean(snapEmpty.recovery.isSubjectiveFallback), false);
+
+  // With journal only -> honest subjective fallback
+  const snapCheckin = buildDailySnapshot(todayKey, profile, [], [], [], [], [], [], [
+    {
+      date: todayKey,
+      updatedAt: `${todayKey}T08:00:00`,
+      subjectiveSleepQuality: 4,
+      energyLevel: 4,
+      subjectiveFatigue: 2,
+      muscleSoreness: 2,
+      stressLevel: 2,
+      mood: 4,
+      illnessSymptoms: false,
+    },
+  ]);
+
+  assert.ok(snapCheckin.recovery.score !== null && snapCheckin.recovery.score >= 60);
+  assert.equal(snapCheckin.recovery.isSubjectiveFallback, true);
+  assert.equal(snapCheckin.recovery.confidence, 'limited');
+  assert.ok(snapCheckin.recovery.recommendedStrainRange !== undefined);
+});
+
+test('computeBedtimeAndCaffeine rounds cleanly across hour boundaries (never 22:60) and works without today sleep', () => {
+  // Wake at 07:13, target 480 + 15 min latency = 495 min -> 07:13 - 8h15m = 22:58 -> rounds to 23:00!
+  const edge = computeBedtimeAndCaffeine(480, 0, '07:13');
+  assert.equal(edge.recommendedBedtime, '23:00');
+  assert.equal(edge.caffeineCutoffTime, '14:00');
+
+  // Wake at 08:13 -> 23:58 -> rounds cleanly to 00:00!
+  const midnight = computeBedtimeAndCaffeine(480, 0, '08:13');
+  assert.equal(midnight.recommendedBedtime, '00:00');
+  assert.equal(midnight.caffeineCutoffTime, '15:00');
+
+  // assessSleep still returns recommendedBedtime & caffeineCutoffTime with zero logged sleep sessions
+  const profile = createDefaultProfile({ sleepTargetMinutes: 480, preferredWakeTime: '06:45' }, '2026-11-22');
+  const emptySleep = assessSleep('2026-11-22', profile, []);
+  assert.equal(emptySleep.score, null);
+  assert.ok(emptySleep.recommendedBedtime && /^\d{2}:\d{2}$/.test(emptySleep.recommendedBedtime));
+  assert.ok(emptySleep.caffeineCutoffTime && /^\d{2}:\d{2}$/.test(emptySleep.caffeineCutoffTime));
+  assert.ok(!emptySleep.recommendedBedtime.endsWith(':60'));
+});
+
+test('simulateWorkoutImpact returns real beforeStrain21 and afterStrain21 strictly greater than before', () => {
+  const refDate = new Date('2026-11-17T08:00:00');
+  const todayKey = toLocalDateKey(refDate);
+  const balanced = generateScenarioDataset('balanced', undefined, refDate);
+  const snap = buildDailySnapshot(
+    todayKey,
+    balanced.profile,
+    balanced.hrvObservations,
+    balanced.rhrObservations,
+    balanced.sleepSessions,
+    balanced.workouts,
+    balanced.dailyActivities,
+    balanced.bodyMeasurements,
+    balanced.journalEntries
+  );
+
+  const sim = simulateWorkoutImpact(
+    todayKey,
+    { sport: 'running', durationMinutes: 50, distanceKm: 10, avgHrBpm: 155, rpe: 7 },
+    balanced.profile,
+    snap,
+    balanced.workouts
+  );
+
+  assert.ok(typeof sim.beforeStrain21 === 'number');
+  assert.ok(typeof sim.afterStrain21 === 'number');
+  assert.ok(sim.afterStrain21! > sim.beforeStrain21!, `expected afterStrain21 (${sim.afterStrain21}) > beforeStrain21 (${sim.beforeStrain21})`);
+});
+
+test('assessTrainingLoad produces non-zero chronicLoad28d on the very first workout', () => {
+  const todayKey = '2026-11-22';
+  const profile = createDefaultProfile({}, todayKey);
+  const firstWorkout = {
+    id: 'w_first',
+    date: todayKey,
+    timestamp: `${todayKey}T08:00:00`,
+    sourceProvider: 'other' as const,
+    sourceRecordId: 'w_first',
+    dataQuality: 'high' as const,
+    provenance: 'measured' as const,
+    metricType: 'workout' as const,
+    sport: 'running' as const,
+    title: 'Erster Lauf',
+    startTimeIso: `${todayKey}T08:00:00`,
+    durationMinutes: 40,
+    distanceKm: 7.5,
+    avgHrBpm: 148,
+    rpe: 6,
+    rawLoadScore: 55,
+    normalizedLoad: 58,
+    caloriesBurned: 480,
+    hrZoneMinutes: [5, 20, 12, 3, 0] as [number, number, number, number, number],
+  };
+  const baseline = computePersonalBaseline(todayKey, [], [], [], [firstWorkout], []);
+  const load = assessTrainingLoad(todayKey, profile, [firstWorkout], baseline);
+  assert.ok(load.acuteLoad7d > 0);
+  assert.ok(load.chronicLoad28d > 0);
+});
+
+test('computeHabitCorrelations never returns hardcoded -9% and computes real statistical impact when >= 2 days per group exist', () => {
+  // Only 1 alcohol day + 1 non-alcohol day -> must NOT fabricate -9%, must be ready: false
+  const sparseJournals = [
+    {
+      date: '2026-11-18',
+      updatedAt: '2026-11-18T21:00:00',
+      subjectiveSleepQuality: 3 as const,
+      energyLevel: 3 as const,
+      subjectiveFatigue: 3 as const,
+      muscleSoreness: 2 as const,
+      stressLevel: 2 as const,
+      mood: 3 as const,
+      illnessSymptoms: false,
+      alcoholDrinks: 2,
+      habitTags: ['alcohol' as const],
+    },
+    {
+      date: '2026-11-19',
+      updatedAt: '2026-11-19T21:00:00',
+      subjectiveSleepQuality: 4 as const,
+      energyLevel: 4 as const,
+      subjectiveFatigue: 2 as const,
+      muscleSoreness: 2 as const,
+      stressLevel: 2 as const,
+      mood: 4 as const,
+      illnessSymptoms: false,
+      alcoholDrinks: 0,
+      habitTags: [],
+    },
+  ];
+  const sparseCorrs = computeHabitCorrelations(sparseJournals, [], []);
+  assert.ok(sparseCorrs.every((c) => !c.ready || c.impactPct !== -9));
+
+  // Now build 6 consecutive days with HRV: 3 alcohol days followed by low HRV (45 ms), 3 clean days followed by high HRV (75 ms)
+  const richJournals = [];
+  const richHrv = [];
+  for (let i = 0; i < 6; i++) {
+    const day = String(10 + i).padStart(2, '0');
+    const nextDay = String(11 + i).padStart(2, '0');
+    const isAlcohol = i % 2 === 0;
+    richJournals.push({
+      date: `2026-11-${day}`,
+      updatedAt: `2026-11-${day}T21:00:00`,
+      subjectiveSleepQuality: 4 as const,
+      energyLevel: 4 as const,
+      subjectiveFatigue: 2 as const,
+      muscleSoreness: 2 as const,
+      stressLevel: 2 as const,
+      mood: 4 as const,
+      illnessSymptoms: false,
+      alcoholDrinks: isAlcohol ? 2 : 0,
+      habitTags: isAlcohol ? (['alcohol'] as const) : ([] as const),
+    });
+    richHrv.push({
+      id: `hrv_${i}`,
+      date: `2026-11-${nextDay}`,
+      timestamp: `2026-11-${nextDay}T07:00:00`,
+      sourceProvider: 'garmin' as const,
+      sourceRecordId: `hrv_${i}`,
+      dataQuality: 'high' as const,
+      provenance: 'measured' as const,
+      metricType: 'hrv_rmssd' as const,
+      unit: 'ms' as const,
+      value: isAlcohol ? 45 : 75,
+      recordingContext: 'overnight_avg' as const,
+    });
+  }
+
+  const richCorrs = computeHabitCorrelations(
+    richJournals.map((j) => ({ ...j, habitTags: [...j.habitTags] })),
+    richHrv,
+    []
+  );
+  const alc = richCorrs.find((c) => c.id === 'habit_alcohol');
+  assert.ok(alc && alc.ready, 'alcohol correlation should be ready with 3 with + 3 without');
+  assert.ok(alc!.impactPct !== null && alc!.impactPct <= -20, `expected strong negative impact, got ${alc!.impactPct}`);
+});
+

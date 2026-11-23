@@ -7,8 +7,10 @@ import {
   FitnessAgeEstimate,
   FitnessAgeHistoryPoint,
   HabitImpactSummary,
+  HabitTagId,
   HRVObservation,
   HRZoneConfig,
+  HydrationEntry,
   JournalEntry,
   KilometerSplit,
   PersonalBaseline,
@@ -30,6 +32,7 @@ import {
   WorkoutTimeSeriesPoint,
 } from '../types/health';
 import { addDaysToKey, formatDurationMinutes, formatNumberDE } from '../utils/formatters';
+import { estimateMaxHrTanaka, getEffectiveAge } from '../utils/biometrics';
 
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
@@ -65,7 +68,8 @@ function getBedtimeMinutesFromMidnight(iso: string): number {
 }
 
 export function getHRZones(profile: UserProfile, restingHr = 55): HRZoneConfig[] {
-  const maxHr = clamp(profile.maxHr || 190, 140, 220);
+  const effectiveAge = getEffectiveAge(profile);
+  const maxHr = clamp(profile.maxHr || estimateMaxHrTanaka(effectiveAge), 140, 220);
   const rhr = clamp(profile.restingHrBaselineManual ?? restingHr, 35, 95);
   const useHrr = profile.hrZoneMethod !== 'hrmax';
 
@@ -152,7 +156,8 @@ export function calculateWorkoutLoad(
   restingHr = 55
 ): { rawLoad: number; normalizedLoad: number; zoneMinutes: [number, number, number, number, number] } {
   const duration = Math.max(1, params.durationMinutes);
-  const maxHr = clamp(profile.maxHr || 190, 140, 220);
+  const effectiveAge = getEffectiveAge(profile);
+  const maxHr = clamp(profile.maxHr || estimateMaxHrTanaka(effectiveAge), 140, 220);
   const rhr = clamp(profile.restingHrBaselineManual ?? restingHr, 35, 95);
   const sportMult = getSportLoadMultiplier(params.sport);
 
@@ -341,6 +346,37 @@ export const SUBJECTIVE_ENERGY_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
   5: 'Voller Energie',
 };
 
+export function computeBedtimeAndCaffeine(
+  targetMinutes: number,
+  sleepDebtMinutes: number,
+  preferredWakeTime?: string
+): {
+  sleepNeedMinutes: number;
+  recommendedBedtime: string;
+  caffeineCutoffTime: string;
+} {
+  // Dynamic Sleep Need (Base + 20% rolling 7d debt capped at +45 min)
+  const sleepNeedMinutes = Math.round(targetMinutes + Math.min(45, Math.max(0, sleepDebtMinutes) * 0.2));
+  const [wakeH, wakeM] = (preferredWakeTime || '06:45')
+    .split(':')
+    .map((n) => parseInt(n, 10) || 0);
+  const wakeTotalMin = clamp(wakeH, 0, 23) * 60 + clamp(wakeM, 0, 59);
+  const rawBedMin = ((wakeTotalMin - (sleepNeedMinutes + 15)) % 1440 + 1440) % 1440;
+  // Round total minutes cleanly to nearest 5 min (handles 22:58 -> 23:00 and 23:58 -> 00:00)
+  const roundedBedMin = (Math.round(rawBedMin / 5) * 5) % 1440;
+  const recommendedBedtime = `${String(Math.floor(roundedBedMin / 60)).padStart(2, '0')}:${String(
+    roundedBedMin % 60
+  ).padStart(2, '0')}`;
+
+  // Evidence-based caffeine cutoff ~9 hours before bedtime (Drake et al., J Clin Sleep Med)
+  const cafMin = ((roundedBedMin - 9 * 60) % 1440 + 1440) % 1440;
+  const caffeineCutoffTime = `${String(Math.floor(cafMin / 60)).padStart(2, '0')}:${String(
+    cafMin % 60
+  ).padStart(2, '0')}`;
+
+  return { sleepNeedMinutes, recommendedBedtime, caffeineCutoffTime };
+}
+
 export function assessSleep(
   targetDate: string,
   profile: UserProfile,
@@ -365,12 +401,22 @@ export function assessSleep(
   }
   sleepDebtMinutes = Math.max(0, Math.round(sleepDebtMinutes));
 
+  const { sleepNeedMinutes, recommendedBedtime, caffeineCutoffTime } = computeBedtimeAndCaffeine(
+    targetMinutes,
+    sleepDebtMinutes,
+    profile.preferredWakeTime
+  );
+
   if (!session) {
     return {
       date: targetDate,
       score: null,
       objectiveScore: null,
       subjectiveSleepQuality,
+      sleepPerformancePercent: null,
+      sleepNeedMinutes,
+      recommendedBedtime,
+      caffeineCutoffTime,
       durationMinutes: null,
       targetMinutes,
       durationDeltaMinutes: null,
@@ -382,7 +428,7 @@ export function assessSleep(
       confidence: 'insufficient',
       recoveryContributionText: 'Keine Schlafdaten für diese Nacht vorhanden.',
       insights: [
-        'Für dieses Datum liegt keine Schlafaufzeichnung vor. Trage oder synchronisiere Daten, um eine vollständige Auswertung zu erhalten.',
+        'Für dieses Datum liegt keine Schlafaufzeichnung vor. Trage deine Nacht kurz manuell ein oder synchronisiere dein Wearable.',
       ],
     };
   }
@@ -495,24 +541,12 @@ export function assessSleep(
         ? 'Solider Schlaf, aber bei Dauer oder Schlafgefühl ist noch etwas Luft nach oben.'
         : 'Wenig oder unruhiger Schlaf — bremst deine Erholung heute spürbar.';
 
-  // Dynamic Sleep Need (Base + 20% rolling debt capped at +45m) & Recommended Bedtime + Caffeine Cutoff
-  const sleepNeedMinutes = Math.round(targetMinutes + Math.min(45, sleepDebtMinutes * 0.2));
+  // Dynamic Sleep Need, Performance & Bedtime/Caffeine Coach (already computed cleanly above)
   const rawPerf = clamp((session.totalSleepMinutes / Math.max(300, sleepNeedMinutes)) * 100, 10, 100);
   const sleepPerformancePercent =
     subjectiveSleepQuality !== undefined
       ? Math.round(clamp(rawPerf * 0.85 + SUBJECTIVE_SLEEP_SCORE_MAP[subjectiveSleepQuality] * 0.15, 10, 100))
       : Math.round(rawPerf);
-  const [wakeH, wakeM] = (profile.preferredWakeTime || '06:45').split(':').map((n) => parseInt(n, 10) || 0);
-  const wakeTotalMin = wakeH * 60 + wakeM;
-  const recBedMin = ((wakeTotalMin - (sleepNeedMinutes + 15)) % 1440 + 1440) % 1440;
-  const recommendedBedtime = `${String(Math.floor(recBedMin / 60)).padStart(2, '0')}:${String(
-    Math.round((recBedMin % 60) / 5) * 5 % 60
-  ).padStart(2, '0')}`;
-  // Evidence-based caffeine cutoff ~9 hours before bedtime (Drake et al., J Clin Sleep Med)
-  const cafMin = ((recBedMin - 9 * 60) % 1440 + 1440) % 1440;
-  const caffeineCutoffTime = `${String(Math.floor(cafMin / 60)).padStart(2, '0')}:${String(
-    cafMin % 60
-  ).padStart(2, '0')}`;
 
   return {
     date: targetDate,
@@ -604,7 +638,7 @@ export function assessTrainingLoad(
     rawDailyLoad,
     classification,
     acuteLoad7d,
-    chronicLoad28d: baseline.chronicLoad28d > 0 ? chronicLoad28d : baseline.chronicLoad28d,
+    chronicLoad28d: chronicLoad28d > 0 ? chronicLoad28d : baseline.chronicLoad28d,
     acuteChronicRatio,
     ewmaAcwr: baseline.ewmaAcwr ?? acuteChronicRatio,
     weeklyAvgLoad,
@@ -832,6 +866,8 @@ export function assessRecovery(
       : null;
 
   let finalScore: number | null = null;
+  let isSubjectiveFallback = false;
+
   if (availableWeightSum >= 0.4) {
     let weightedSum = 0;
     for (const f of rawFactors) {
@@ -842,6 +878,15 @@ export function assessRecovery(
       }
     }
     finalScore = Math.round(clamp(weightedSum, 5, 99));
+  } else if (journal && journalScore !== null) {
+    // Honest wearable-free Check-in mode: blends subjective feeling (78%) + recent training load (22%)
+    isSubjectiveFallback = true;
+    for (const f of rawFactors) {
+      if (f.key === 'journal') f.weightUsed = 78;
+      else if (f.key === 'load') f.weightUsed = 22;
+      else f.weightUsed = 0;
+    }
+    finalScore = Math.round(clamp(journalScore * 0.78 + loadScore * 0.22, 8, 96));
   }
 
   let subjectiveAlignmentNote: string | undefined;
@@ -856,7 +901,11 @@ export function assessRecovery(
 
   let confidence: ConfidenceLevel = 'good';
   let confidenceReason = 'Alle wichtigen Morgenwerte und dein 4-Wochen-Schnitt liegen vor.';
-  if (availableWeightSum < 0.45) {
+  if (isSubjectiveFallback) {
+    confidence = 'limited';
+    confidenceReason =
+      'Check-in-Modus ohne Wearable: basiert auf deinem heutigen Schlaf- und Energiegefühl sowie der letzten Trainingslast.';
+  } else if (availableWeightSum < 0.45) {
     confidence = 'insufficient';
     confidenceReason = 'Es fehlen zu viele Morgenwerte (Nerven-Erholung, Puls oder Schlaf), um sicher zu rechnen.';
   } else if (availableWeightSum < 0.80 || baseline.hrvCount28d < 7) {
@@ -987,6 +1036,7 @@ export function assessRecovery(
     objectiveOnlyScore,
     subjectiveScore: journalScore !== null ? Math.round(journalScore) : null,
     subjectiveAlignmentNote,
+    isSubjectiveFallback,
   };
 }
 
@@ -1176,7 +1226,7 @@ export function estimateFitnessAge(
   sleepList: SleepSession[] = [],
   includeHistory = true
 ): FitnessAgeEstimate {
-  const chronologicalAge = profile.age || 30;
+  const chronologicalAge = getEffectiveAge(profile);
   const start90 = addDaysToKey(targetDate, -90);
   const start28 = addDaysToKey(targetDate, -28);
 
@@ -1345,72 +1395,187 @@ export function estimateFitnessAge(
   };
 }
 
+export const HABIT_TAG_DEFINITIONS: {
+  id: HabitTagId;
+  label: string;
+  explanation: string;
+}[] = [
+  {
+    id: 'late_meal',
+    label: 'Spätes Essen (< 2h vor Schlaf)',
+    explanation: 'Vergleicht deine Folgetags-Erholung nach späten Mahlzeiten gegenüber früherem Abendessen.',
+  },
+  {
+    id: 'late_caffeine',
+    label: 'Koffein spät (nach Cutoff)',
+    explanation: 'Zeigt, wie sich spätes Koffein auf deine nächste Nacht und Erholung auswirkt.',
+  },
+  {
+    id: 'alcohol',
+    label: 'Alkohol',
+    explanation: 'Vergleicht Erholungswerte am Folgetag nach Alkohol gegenüber alkoholfreien Tagen.',
+  },
+  {
+    id: 'magnesium',
+    label: 'Magnesium abends',
+    explanation: 'Vergleicht deine Folgetags-Werte an Tagen mit Magnesium gegenüber Tagen ohne.',
+  },
+  {
+    id: 'sauna_cold',
+    label: 'Sauna / Kälte',
+    explanation: 'Auswirkung von Sauna oder Kälteexposition auf die Erholung am nächsten Morgen.',
+  },
+  {
+    id: 'screen_free',
+    label: 'Bildschirmfrei vor Schlaf',
+    explanation: 'Effekt einer ruhigen, bildschirmfreien Abendroutine auf den Folgetag.',
+  },
+  {
+    id: 'stretching',
+    label: 'Dehnen / Mobility',
+    explanation: 'Vergleicht Tage mit Mobility oder Dehnen gegenüber Tagen ohne.',
+  },
+  {
+    id: 'hydrated',
+    label: 'Hydratation ≥ 2,2 L',
+    explanation: 'Ausreichend Wasser unterstützt Blutplasmavolumen und nächtliche Erholung.',
+  },
+];
+
 /**
- * Whoop-style Habit Impact Correlation Analysis
- * Computes observable differences in next-day HRV/Recovery when journal habits are logged.
+ * WHOOP-style Honest Statistical Habit Impact Engine ("Was hilft meiner Erholung?")
+ * - Never fabricates hardcoded percentages!
+ * - Compares real next-day HRV (when >= 4 HRV observations exist) or next-day subjective energy score
+ *   between days WITH a habit and days WITHOUT that habit.
+ * - Requires at least 2 observations in both groups (`withCount >= 2 && withoutCount >= 2`) before
+ *   emitting a percentage; otherwise returns transparent sample progress (`ready: false`).
  */
 export function computeHabitCorrelations(
   journals: JournalEntry[],
   hrvList: HRVObservation[],
-  sleepList: SleepSession[]
+  sleepList: SleepSession[],
+  hydrationEntries: HydrationEntry[] = []
 ): HabitImpactSummary[] {
   const results: HabitImpactSummary[] = [];
   const hrvByDate = new Map(hrvList.map((h) => [h.date, h.value]));
+  const journalByDate = new Map(journals.map((j) => [j.date, j]));
+  const hydrationByDate = new Map(hydrationEntries.map((h) => [h.date, h.ml]));
 
-  // 1. Sleep >= 7.5h vs < 7.5h impact on next-day HRV
-  const goodSleepHrvs: number[] = [];
-  const shortSleepHrvs: number[] = [];
+  const useHrvMetric = hrvList.length >= 4;
+  const metricLabel = useHrvMetric ? 'HRV am Folgetag' : 'Energie am Folgetag';
+
+  const getNextDayOutcome = (dateKey: string): number | null => {
+    const nextDay = addDaysToKey(dateKey, 1);
+    if (useHrvMetric) {
+      return hrvByDate.get(nextDay) ?? null;
+    }
+    const nextJournal = journalByDate.get(nextDay);
+    return nextJournal ? SUBJECTIVE_ENERGY_SCORE_MAP[nextJournal.energyLevel] : null;
+  };
+
+  // 1. Objective Sleep >= 7h 30m vs < 7h 30m on same-morning HRV
+  const goodSleepVals: number[] = [];
+  const shortSleepVals: number[] = [];
   for (const s of sleepList.slice(-60)) {
-    const hrv = hrvByDate.get(s.date);
-    if (!hrv) continue;
-    if (s.totalSleepMinutes >= 450) goodSleepHrvs.push(hrv);
-    else shortSleepHrvs.push(hrv);
+    const outcome = useHrvMetric
+      ? hrvByDate.get(s.date) ?? null
+      : journalByDate.get(s.date)
+        ? SUBJECTIVE_ENERGY_SCORE_MAP[journalByDate.get(s.date)!.energyLevel]
+        : null;
+    if (outcome === null) continue;
+    if (s.totalSleepMinutes >= 450) goodSleepVals.push(outcome);
+    else shortSleepVals.push(outcome);
   }
-  if (goodSleepHrvs.length >= 3 && shortSleepHrvs.length >= 3) {
-    const diffPct = Math.round(((mean(goodSleepHrvs) - mean(shortSleepHrvs)) / mean(shortSleepHrvs)) * 100);
+  if (goodSleepVals.length >= 2 && shortSleepVals.length >= 2) {
+    const base = Math.max(1, mean(shortSleepVals));
+    const diffPct = Math.round(((mean(goodSleepVals) - base) / base) * 100);
     results.push({
       id: 'habit_sleep_75',
       habit: 'Schlaf ≥ 7 h 30',
-      impactPct: clamp(diffPct, -25, 25),
-      sampleCount: goodSleepHrvs.length,
-      explanation: 'Vergleicht deine Morgen-HRV nach Nächten mit mind. 7,5 Std. Schlaf gegenüber kürzeren Nächten.',
+      impactPct: clamp(diffPct, -30, 30),
+      sampleCount: goodSleepVals.length + shortSleepVals.length,
+      withCount: goodSleepVals.length,
+      withoutCount: shortSleepVals.length,
+      minRequiredPerGroup: 2,
+      metricLabel: useHrvMetric ? 'Morgen-HRV' : 'Tages-Energie',
+      ready: true,
+      explanation: 'Vergleicht deine Morgenwerte nach Nächten mit mind. 7,5 Std. Schlaf gegenüber kürzeren Nächten.',
     });
   }
 
-  // 2. Hydration >= 2.2L from journal
-  const hydratedHrvs: number[] = [];
-  const dryHrvs: number[] = [];
-  for (const j of journals) {
-    const nextHrv = hrvByDate.get(addDaysToKey(j.date, 1)) ?? hrvByDate.get(j.date);
-    if (!nextHrv || j.hydrationLiters === undefined) continue;
-    if (j.hydrationLiters >= 2.2) hydratedHrvs.push(nextHrv);
-    else dryHrvs.push(nextHrv);
-  }
-  if (hydratedHrvs.length >= 2) {
-    const base = dryHrvs.length > 0 ? mean(dryHrvs) : mean(hrvList.slice(-28).map((h) => h.value)) * 0.96;
-    const diffPct = Math.round(((mean(hydratedHrvs) - base) / Math.max(1, base)) * 100);
+  // 2. Structured Habit Tags + Hydration + Alcohol + High Stress from Journals
+  const recentJournals = [...journals]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-90);
+
+  const evaluateBinaryHabit = (
+    id: string,
+    habit: string,
+    explanation: string,
+    hasHabit: (j: JournalEntry) => boolean
+  ) => {
+    const withVals: number[] = [];
+    const withoutVals: number[] = [];
+    let taggedDaysTotal = 0;
+
+    for (const j of recentJournals) {
+      const present = hasHabit(j);
+      if (present) taggedDaysTotal++;
+      const outcome = getNextDayOutcome(j.date);
+      if (outcome === null) continue;
+      if (present) withVals.push(outcome);
+      else withoutVals.push(outcome);
+    }
+
+    if (taggedDaysTotal === 0) return;
+
+    const ready = withVals.length >= 2 && withoutVals.length >= 2;
+    let impactPct: number | null = null;
+    if (ready) {
+      const base = Math.max(1, mean(withoutVals));
+      impactPct = clamp(Math.round(((mean(withVals) - base) / base) * 100), -30, 30);
+    }
+
     results.push({
-      id: 'habit_hydration',
-      habit: 'Hydratation ≥ 2,2 L',
-      impactPct: clamp(diffPct || 4, -20, 20),
-      sampleCount: hydratedHrvs.length,
-      explanation: 'Ausreichend Wasser unterstützt Blutplasmavolumen und nächtliche Erholung.',
+      id,
+      habit,
+      impactPct,
+      sampleCount: ready ? withVals.length + withoutVals.length : taggedDaysTotal,
+      withCount: withVals.length,
+      withoutCount: withoutVals.length,
+      minRequiredPerGroup: 2,
+      metricLabel,
+      ready,
+      explanation,
+    });
+  };
+
+  for (const def of HABIT_TAG_DEFINITIONS) {
+    evaluateBinaryHabit(`habit_${def.id}`, def.label, def.explanation, (j) => {
+      const tags = j.habitTags ?? [];
+      if (tags.includes(def.id)) return true;
+      if (def.id === 'alcohol') return (j.alcoholDrinks ?? 0) > 0;
+      if (def.id === 'hydrated') {
+        const ml = hydrationByDate.get(j.date);
+        return (ml !== undefined && ml >= 2200) || (j.hydrationLiters ?? 0) >= 2.2;
+      }
+      return false;
     });
   }
 
-  // 3. Alcohol or high stress impact
-  const stressDays = journals.filter((j) => j.stressLevel >= 4 || (j.alcoholDrinks ?? 0) > 0);
-  if (stressDays.length >= 1) {
-    results.push({
-      id: 'habit_stress',
-      habit: 'Hoher Alltagsstress',
-      impactPct: -9,
-      sampleCount: stressDays.length,
-      explanation: 'Tage mit erhöhtem Stress gingen in deinem Verlauf mit geringerer nächtlicher HRV einher.',
-    });
-  }
+  // 3. High Daily Stress (honest statistical comparison, zero hardcoded -9%!)
+  evaluateBinaryHabit(
+    'habit_stress',
+    'Hoher Alltagsstress',
+    'Vergleicht deine Folgetags-Erholung nach Tagen mit hohem Stress (≥ 4/5) gegenüber ruhigeren Tagen.',
+    (j) => j.stressLevel >= 4
+  );
 
-  return results;
+  // Sort ready insights by absolute effect size descending, followed by collecting items
+  return results.sort((a, b) => {
+    if (Boolean(a.ready) !== Boolean(b.ready)) return a.ready ? -1 : 1;
+    return Math.abs(b.impactPct ?? 0) - Math.abs(a.impactPct ?? 0);
+  });
 }
 
 export function generatePersonalizedInsights(
@@ -1697,11 +1862,11 @@ export function simulateWorkoutImpact(
           : 'Einheit';
 
   const simulatedWorkout: WorkoutSession = {
-    id: `sim_${Date.now()}`,
+    id: `sim_preview_${targetDate}_${input.sport}_${input.durationMinutes}_${input.avgHrBpm ?? input.rpe}`,
     date: targetDate,
     timestamp: `${targetDate}T17:30:00`,
     sourceProvider: 'other',
-    sourceRecordId: `sim_rec_${Date.now()}`,
+    sourceRecordId: `sim_rec_${targetDate}_${input.sport}`,
     dataQuality: input.avgHrBpm ? 'high' : 'moderate',
     provenance: 'app_estimate',
     metricType: 'workout',
@@ -1717,6 +1882,7 @@ export function simulateWorkoutImpact(
     caloriesKcal: Math.round(input.durationMinutes * (input.avgHrBpm ? (input.avgHrBpm - 40) * 0.115 : 8.5)),
     rawLoadScore: rawLoad,
     normalizedLoad,
+    strain21: calculateStrain21(rawLoad),
     hrZoneMinutes: zoneMinutes,
     timeSeries,
     splits,
@@ -1724,8 +1890,11 @@ export function simulateWorkoutImpact(
   };
 
   const beforeDailyLoad = currentSnapshot.trainingLoad.dailyLoadScore;
-  const afterRawDaily = currentSnapshot.trainingLoad.rawDailyLoad + rawLoad;
+  const beforeRawDaily = currentSnapshot.trainingLoad.rawDailyLoad;
+  const afterRawDaily = beforeRawDaily + rawLoad;
   const afterDailyLoad = normalizeDailyLoadScore(afterRawDaily);
+  const beforeStrain21 = calculateStrain21(beforeRawDaily);
+  const afterStrain21 = calculateStrain21(afterRawDaily);
 
   const beforeAcuteLoad = currentSnapshot.trainingLoad.acuteLoad7d;
   // Recompute 7d average with simulated workout
@@ -1770,6 +1939,8 @@ export function simulateWorkoutImpact(
     simulatedWorkout,
     beforeDailyLoad,
     afterDailyLoad,
+    beforeStrain21,
+    afterStrain21,
     beforeAcuteLoad,
     afterAcuteLoad,
     beforeNextDayReadiness,

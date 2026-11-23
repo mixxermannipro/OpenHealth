@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, ChevronRight } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { DailyDerivedSnapshot, JournalEntry } from '../../types/health';
 import { useHealthStore } from '../../store/useHealthStore';
-import {
-  SUBJECTIVE_ENERGY_LABELS,
-  SUBJECTIVE_SLEEP_LABELS,
-} from '../../engine/calculations';
 import { ExplanationTopic } from '../../i18n/de';
+import { useI18n } from '../../i18n/useI18n';
 import { InfoButton } from './InfoButton';
 import { triggerHaptic } from '../../utils/haptics';
 
@@ -17,29 +15,29 @@ interface DailyCheckInCardProps {
   onOpenJournal: () => void;
 }
 
-const SLEEP_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; short: string }[] = [
-  { value: 1, short: 'Schlecht' },
-  { value: 2, short: 'Unruhig' },
-  { value: 3, short: 'Okay' },
-  { value: 4, short: 'Gut' },
-  { value: 5, short: 'Top' },
-];
-
-const ENERGY_OPTIONS: { value: 1 | 2 | 3 | 4 | 5; short: string }[] = [
-  { value: 1, short: 'Leer' },
-  { value: 2, short: 'Müde' },
-  { value: 3, short: 'Normal' },
-  { value: 4, short: 'Fit' },
-  { value: 5, short: 'Voll da' },
-];
-
 export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
   snapshot,
   onExplain,
   onOpenJournal,
 }) => {
-  const { selectedDate, saveJournalEntry } = useHealthStore();
+  const { selectedDate, saveJournalEntry } = useHealthStore(
+    useShallow((s) => ({
+      selectedDate: s.selectedDate,
+      saveJournalEntry: s.saveJournalEntry,
+    }))
+  );
+  const { t } = useI18n();
   const existing = snapshot.journal;
+
+  const sleepOptions: { value: 1 | 2 | 3 | 4 | 5; short: string }[] = [1, 2, 3, 4, 5].map((v) => ({
+    value: v as 1 | 2 | 3 | 4 | 5,
+    short: t.checkin.sleepOptions[v - 1],
+  }));
+
+  const energyOptions: { value: 1 | 2 | 3 | 4 | 5; short: string }[] = [1, 2, 3, 4, 5].map((v) => ({
+    value: v as 1 | 2 | 3 | 4 | 5,
+    short: t.checkin.energyOptions[v - 1],
+  }));
 
   const [sleepFeel, setSleepFeel] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
   const [energyFeel, setEnergyFeel] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
@@ -65,6 +63,7 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
       caffeineMg: existing?.caffeineMg,
       alcoholDrinks: existing?.alcoholDrinks ?? 0,
       illnessSymptoms: existing?.illnessSymptoms ?? false,
+      habitTags: existing?.habitTags,
       notes: existing?.notes,
     };
 
@@ -104,13 +103,13 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
                 }`}
               />
               <p className="text-[13px] font-medium text-[var(--text-primary)] truncate">
-                Gefühl heute:{' '}
+                {t.checkin.feelingToday}:{' '}
                 <span className="text-[var(--text-secondary)] font-normal">
-                  Schlaf{' '}
+                  {t.checkin.sleepWord}{' '}
                   {existing.subjectiveSleepQuality !== undefined
-                    ? SUBJECTIVE_SLEEP_LABELS[existing.subjectiveSleepQuality]
+                    ? t.checkin.sleepOptions[existing.subjectiveSleepQuality - 1]
                     : '—'}{' '}
-                  · {SUBJECTIVE_ENERGY_LABELS[existing.energyLevel]}
+                  · {t.checkin.energyOptions[existing.energyLevel - 1]}
                 </span>
               </p>
             </button>
@@ -121,7 +120,7 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
               onClick={onOpenJournal}
               className="shrink-0 inline-flex items-center gap-1 rounded-full bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] px-3 py-1.5 text-[11.5px] font-medium text-[var(--text-primary)] transition-colors"
             >
-              <span>Ändern</span>
+              <span>{t.common.edit}</span>
               <ChevronRight className="w-3 h-3 text-[var(--text-muted)]" />
             </motion.button>
           </div>
@@ -139,26 +138,28 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6, scale: 0.985 }}
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-          aria-label="Täglicher Gefühls-Check-in"
+          aria-label={t.checkin.title}
           className="apple-card p-4 sm:p-5 space-y-3.5"
         >
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
               <h2 className="text-[15px] font-semibold text-[var(--text-primary)] leading-tight">
-                Wie fühlst du dich heute?
+                {t.checkin.title}
               </h2>
               <p className="mt-0.5 text-[11.5px] text-[var(--text-muted)]">
-                2 schnelle Tipps · fließt mit 18 % in deine Werte ein
+                {t.checkin.subtitle}
               </p>
             </div>
-            <InfoButton label="Gewichtung Tagesgefühl" onClick={() => onExplain('recovery')} />
+            <InfoButton label={t.checkin.title} onClick={() => onExplain('recovery')} />
           </div>
 
           {/* Question 1: Sleep Feeling */}
           <div className="space-y-1.5">
-            <p className="text-[12px] font-medium text-[var(--text-secondary)]">Schlafgefühl</p>
+            <p className="text-[12px] font-medium text-[var(--text-secondary)]">
+              {t.checkin.sleepFeel}
+            </p>
             <div className="grid grid-cols-5 gap-1 p-1 rounded-full bg-[var(--bg-well)]">
-              {SLEEP_OPTIONS.map((opt) => {
+              {sleepOptions.map((opt) => {
                 const active = sleepFeel === opt.value;
                 return (
                   <motion.button
@@ -192,9 +193,11 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
 
           {/* Question 2: Energy Feeling */}
           <div className="space-y-1.5">
-            <p className="text-[12px] font-medium text-[var(--text-secondary)]">Energie</p>
+            <p className="text-[12px] font-medium text-[var(--text-secondary)]">
+              {t.checkin.energy}
+            </p>
             <div className="grid grid-cols-5 gap-1 p-1 rounded-full bg-[var(--bg-well)]">
-              {ENERGY_OPTIONS.map((opt) => {
+              {energyOptions.map((opt) => {
                 const active = energyFeel === opt.value;
                 return (
                   <motion.button
@@ -233,7 +236,7 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
               onClick={onOpenJournal}
               className="text-[12px] font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] whitespace-nowrap transition-colors"
             >
-              Mehr Optionen
+              {t.checkin.moreOptions}
             </button>
 
             <motion.button
@@ -244,7 +247,7 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
               className="min-h-[36px] shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] px-4 text-xs font-semibold disabled:opacity-35 hover:opacity-92 transition-opacity"
             >
               <Check className="w-3.5 h-3.5" />
-              <span>Speichern</span>
+              <span>{t.common.save}</span>
             </motion.button>
           </div>
         </motion.section>

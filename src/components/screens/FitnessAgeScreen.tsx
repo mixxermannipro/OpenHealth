@@ -17,6 +17,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
+import { useShallow } from 'zustand/react/shallow';
 import { useHealthStore } from '../../store/useHealthStore';
 import { estimateFitnessAge } from '../../engine/calculations';
 import { ExplanationTopic } from '../../i18n/de';
@@ -37,7 +38,18 @@ export const FitnessAgeScreen: React.FC<FitnessAgeScreenProps> = ({ onExplain })
     workouts,
     dailyActivities,
     setDetailView,
-  } = useHealthStore();
+  } = useHealthStore(
+    useShallow((s) => ({
+      selectedDate: s.selectedDate,
+      profile: s.profile,
+      hrvObservations: s.hrvObservations,
+      rhrObservations: s.rhrObservations,
+      sleepSessions: s.sleepSessions,
+      workouts: s.workouts,
+      dailyActivities: s.dailyActivities,
+      setDetailView: s.setDetailView,
+    }))
+  );
 
   const estimate = useMemo(
     () =>
@@ -55,6 +67,7 @@ export const FitnessAgeScreen: React.FC<FitnessAgeScreenProps> = ({ onExplain })
   );
 
   const chrono = estimate.chronologicalAge;
+  const hasEstimate = estimate.estimatedFitnessAge !== null;
   const fit = estimate.estimatedFitnessAge ?? chrono;
   const diff = estimate.differenceYears ?? 0;
 
@@ -67,7 +80,7 @@ export const FitnessAgeScreen: React.FC<FitnessAgeScreenProps> = ({ onExplain })
 
   const maxAgeBar = Math.max(chrono, fit) * 1.08;
   const chronoWidthPct = Math.min(100, Math.round((chrono / maxAgeBar) * 100));
-  const fitWidthPct = Math.min(100, Math.round((fit / maxAgeBar) * 100));
+  const fitWidthPct = hasEstimate ? Math.min(100, Math.round((fit / maxAgeBar) * 100)) : 0;
 
   const iconForKey = (key?: string) => {
     if (key === 'hrv') return <HeartPulse className="w-4 h-4 text-[var(--accent-hrv)]" />;
@@ -145,7 +158,7 @@ export const FitnessAgeScreen: React.FC<FitnessAgeScreenProps> = ({ onExplain })
                 <div className="flex items-center justify-between text-[13.5px]">
                   <span className="text-[var(--text-secondary)]">Fitnessalter</span>
                   <span className="font-semibold tabular-nums text-[var(--accent-recovery)]">
-                    {formatNumberDE(fit, 1)} Jahre
+                    {hasEstimate ? `${formatNumberDE(fit, 1)} Jahre` : '—'}
                   </span>
                 </div>
                 <div className="h-2.5 w-full rounded-full bg-[var(--bg-well)] overflow-hidden">
@@ -218,55 +231,65 @@ export const FitnessAgeScreen: React.FC<FitnessAgeScreenProps> = ({ onExplain })
             </div>
 
             <div className="h-[196px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={estimate.history30d ?? []}
-                  margin={{ top: 8, right: 8, left: -24, bottom: 0 }}
-                >
-                  <defs>
-                    <linearGradient id="fitAgeGreen" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#5CE17C" stopOpacity={0.3} />
-                      <stop offset="100%" stopColor="#5CE17C" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
-                    vertical={false}
-                    stroke="rgba(255,255,255,0.06)"
-                    strokeDasharray="3 3"
-                  />
-                  <XAxis
-                    dataKey="label"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#717580', fontSize: 11 }}
-                    interval={6}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#717580', fontSize: 11 }}
-                    domain={['dataMin - 0.8', 'dataMax + 0.8']}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#1D1F24',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 14,
-                      fontSize: 12,
-                      color: '#F5F6F8',
-                    }}
-                    formatter={(val: unknown) => [`${formatNumberDE(Number(val), 1)} Jahre`, 'Fitnessalter']}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="age"
-                    stroke="#5CE17C"
-                    strokeWidth={2.5}
-                    fill="url(#fitAgeGreen)"
-                    dot={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {!estimate.history30d || estimate.history30d.length === 0 ? (
+                <div className="h-full rounded-2xl bg-[var(--bg-well)]/45 border border-dashed border-[var(--border-hairline)] flex flex-col items-center justify-center px-5 text-center">
+                  <p className="text-sm font-medium text-[var(--text-primary)]">Noch keine Verlaufswerte</p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)] max-w-xs">
+                    Verbinde deine Datenquelle oder importiere Schlaf- und Pulsdaten, damit dein
+                    30-Tage-Verlauf berechnet werden kann.
+                  </p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart
+                    data={estimate.history30d}
+                    margin={{ top: 8, right: 8, left: -24, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="fitAgeGreen" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#5CE17C" stopOpacity={0.3} />
+                        <stop offset="100%" stopColor="#5CE17C" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid
+                      vertical={false}
+                      stroke="rgba(255,255,255,0.06)"
+                      strokeDasharray="3 3"
+                    />
+                    <XAxis
+                      dataKey="label"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#717580', fontSize: 11 }}
+                      interval={6}
+                    />
+                    <YAxis
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#717580', fontSize: 11 }}
+                      domain={['dataMin - 0.8', 'dataMax + 0.8']}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#1D1F24',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 14,
+                        fontSize: 12,
+                        color: '#F5F6F8',
+                      }}
+                      formatter={(val: unknown) => [`${formatNumberDE(Number(val), 1)} Jahre`, 'Fitnessalter']}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="age"
+                      stroke="#5CE17C"
+                      strokeWidth={2.5}
+                      fill="url(#fitAgeGreen)"
+                      dot={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 

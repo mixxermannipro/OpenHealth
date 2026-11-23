@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronDown, Check } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { BottomSheet } from '../ui/BottomSheet';
 import { IOSSwitch } from '../ui/LiquidPrimitives';
 import { useHealthStore } from '../../store/useHealthStore';
-import { JournalEntry } from '../../types/health';
+import { HabitTagId, JournalEntry } from '../../types/health';
+import { HABIT_TAG_DEFINITIONS } from '../../engine/calculations';
 import { formatGermanFullDate } from '../../utils/formatters';
 import { triggerHaptic } from '../../utils/haptics';
 
@@ -42,12 +44,21 @@ const LEVEL_3_STRESS: { val: 1 | 3 | 5; label: string }[] = [
 ];
 
 export const JournalSheet: React.FC<JournalSheetProps> = ({ open, onClose }) => {
-  const { selectedDate, journalEntries, saveJournalEntry } = useHealthStore();
+  const { selectedDate, journalEntries, hydrationEntries, saveJournalEntry } = useHealthStore(
+    useShallow((s) => ({
+      selectedDate: s.selectedDate,
+      journalEntries: s.journalEntries,
+      hydrationEntries: s.hydrationEntries,
+      saveJournalEntry: s.saveJournalEntry,
+    }))
+  );
   const existing = journalEntries.find((j) => j.date === selectedDate);
+  const hydrationTodayMl = hydrationEntries.find((h) => h.date === selectedDate)?.ml ?? 0;
 
   const [subjectiveSleepQuality, setSubjectiveSleepQuality] = useState<1 | 2 | 3 | 4 | 5>(4);
   const [energyLevel, setEnergyLevel] = useState<1 | 2 | 3 | 4 | 5>(4);
   const [illnessSymptoms, setIllnessSymptoms] = useState(false);
+  const [habitTags, setHabitTags] = useState<HabitTagId[]>([]);
 
   // Optional details hidden behind calm Apple disclosure accordion
   const [showDetails, setShowDetails] = useState(false);
@@ -64,6 +75,10 @@ export const JournalSheet: React.FC<JournalSheetProps> = ({ open, onClose }) => 
       setSubjectiveSleepQuality(existing.subjectiveSleepQuality ?? 3);
       setEnergyLevel(existing.energyLevel);
       setIllnessSymptoms(Boolean(existing.illnessSymptoms));
+      const baseTags = new Set<HabitTagId>(existing.habitTags ?? []);
+      if ((existing.alcoholDrinks ?? 0) > 0) baseTags.add('alcohol');
+      if (hydrationTodayMl >= 2200) baseTags.add('hydrated');
+      setHabitTags(Array.from(baseTags));
       setMuscleSoreness(existing.muscleSoreness);
       setStressLevel(existing.stressLevel);
       setCaffeineMg(existing.caffeineMg !== undefined ? String(existing.caffeineMg) : '');
@@ -75,17 +90,34 @@ export const JournalSheet: React.FC<JournalSheetProps> = ({ open, onClose }) => 
       setSubjectiveSleepQuality(4);
       setEnergyLevel(4);
       setIllnessSymptoms(false);
+      setHabitTags(hydrationTodayMl >= 2200 ? ['hydrated'] : []);
       setMuscleSoreness(1);
       setStressLevel(1);
       setCaffeineMg('');
       setAlcoholDrinks('0');
       setNotes('');
     }
-  }, [open, selectedDate, existing]);
+  }, [open, selectedDate, existing, hydrationTodayMl]);
+
+  const toggleHabitTag = (tagId: HabitTagId) => {
+    triggerHaptic('selection');
+    setHabitTags((prev) => {
+      const exists = prev.includes(tagId);
+      const next = exists ? prev.filter((t) => t !== tagId) : [...prev, tagId];
+      if (tagId === 'alcohol') {
+        setAlcoholDrinks((cur) => (!exists ? (Number(cur) > 0 ? cur : '1') : '0'));
+      }
+      return next;
+    });
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const derivedFatigue = Math.max(1, Math.min(5, 6 - energyLevel)) as 1 | 2 | 3 | 4 | 5;
+    const parsedAlcohol = alcoholDrinks ? Number(alcoholDrinks) : 0;
+    const finalTags = new Set<HabitTagId>(habitTags);
+    if (parsedAlcohol > 0) finalTags.add('alcohol');
+
     const entry: JournalEntry = {
       date: selectedDate,
       updatedAt: new Date().toISOString(),
@@ -95,10 +127,14 @@ export const JournalSheet: React.FC<JournalSheetProps> = ({ open, onClose }) => 
       muscleSoreness,
       stressLevel,
       mood: energyLevel,
-      hydrationLiters: existing?.hydrationLiters,
+      hydrationLiters:
+        hydrationTodayMl > 0
+          ? Number((hydrationTodayMl / 1000).toFixed(2))
+          : existing?.hydrationLiters,
       caffeineMg: caffeineMg ? Number(caffeineMg) : undefined,
-      alcoholDrinks: alcoholDrinks ? Number(alcoholDrinks) : 0,
+      alcoholDrinks: parsedAlcohol,
       illnessSymptoms,
+      habitTags: Array.from(finalTags),
       notes: notes.trim() || undefined,
     };
     await saveJournalEntry(entry);
@@ -195,6 +231,39 @@ export const JournalSheet: React.FC<JournalSheetProps> = ({ open, onClose }) => 
             onChange={setIllnessSymptoms}
             ariaLabel="Erkältungs- oder Krankheitssymptome"
           />
+        </div>
+
+        {/* WHOOP-style 1-Tap Habit Tags for statistical next-day recovery analysis */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[13.5px] font-semibold text-[var(--text-primary)]">
+              Einflussfaktoren heute
+            </p>
+            <span className="text-[11px] text-[var(--text-muted)]">Für Erholungs-Analyse</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {HABIT_TAG_DEFINITIONS.map((tag) => {
+              const active = habitTags.includes(tag.id);
+              return (
+                <motion.button
+                  key={tag.id}
+                  type="button"
+                  whileTap={{ scale: 0.95 }}
+                  aria-pressed={active}
+                  onClick={() => toggleHabitTag(tag.id)}
+                  className={`min-h-[34px] rounded-full px-3 text-[12px] font-medium border transition-colors ${
+                    active
+                      ? tag.id === 'late_meal' || tag.id === 'late_caffeine' || tag.id === 'alcohol'
+                        ? 'bg-[var(--accent-strain)]/18 border-[var(--accent-strain)]/45 text-[var(--accent-strain)] font-semibold'
+                        : 'bg-[var(--accent-recovery)]/18 border-[var(--accent-recovery)]/45 text-[var(--accent-recovery)] font-semibold'
+                      : 'bg-[var(--bg-well)]/75 border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  {tag.label}
+                </motion.button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Collapsible Optional Details — Hidden by default for effortless simplicity */}

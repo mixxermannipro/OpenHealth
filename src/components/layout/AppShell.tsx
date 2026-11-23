@@ -13,29 +13,19 @@ import {
   Info,
   X,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { PrimaryTab } from '../../types/health';
 import { useHealthStore } from '../../store/useHealthStore';
 import { useScrollVisibility } from '../../hooks/useScrollDirection';
 import { triggerHaptic } from '../../utils/haptics';
 import { de } from '../../i18n/de';
+import { useI18n } from '../../i18n/useI18n';
 
 interface AppShellProps {
   children: React.ReactNode;
   onOpenJournal: () => void;
   onOpenBreathwork: () => void;
 }
-
-const NAV_ITEMS: {
-  id: PrimaryTab;
-  label: string;
-  icon: React.FC<{ className?: string; strokeWidth?: number }>;
-}[] = [
-  { id: 'today', label: de.nav.today, icon: Home },
-  { id: 'activity', label: de.nav.activity, icon: Activity },
-  { id: 'sleep', label: de.nav.sleep, icon: Moon },
-  { id: 'nutrition', label: de.nav.nutrition, icon: Utensils },
-  { id: 'more', label: de.nav.more, icon: MoreHorizontal },
-];
 
 const TAB_ORDER: PrimaryTab[] = ['today', 'activity', 'sleep', 'nutrition', 'more'];
 
@@ -45,7 +35,30 @@ export const AppShell: React.FC<AppShellProps> = ({
   onOpenBreathwork,
 }) => {
   const { activeTab, detailView, setActiveTab, setDetailView, toast, dismissToast, profile } =
-    useHealthStore();
+    useHealthStore(
+      useShallow((s) => ({
+        activeTab: s.activeTab,
+        detailView: s.detailView,
+        setActiveTab: s.setActiveTab,
+        setDetailView: s.setDetailView,
+        toast: s.toast,
+        dismissToast: s.dismissToast,
+        profile: s.profile,
+      }))
+    );
+  const { t } = useI18n();
+
+  const navItems: {
+    id: PrimaryTab;
+    label: string;
+    icon: React.FC<{ className?: string; strokeWidth?: number }>;
+  }[] = [
+    { id: 'today', label: t.nav.today, icon: Home },
+    { id: 'activity', label: t.nav.activity, icon: Activity },
+    { id: 'sleep', label: t.nav.sleep, icon: Moon },
+    { id: 'nutrition', label: t.nav.nutrition, icon: Utensils },
+    { id: 'more', label: t.nav.more, icon: MoreHorizontal },
+  ];
 
   const viewKey = `${activeTab}:${detailView}`;
   const navVisible = useScrollVisibility({
@@ -141,14 +154,14 @@ export const AppShell: React.FC<AppShellProps> = ({
                 {de.brandName}
               </p>
               <p className="text-[11px] text-[var(--text-muted)] mt-1 leading-none">
-                Local-First Health
+                {t.nav.localOnDevice}
               </p>
             </div>
           </div>
         </div>
 
-        <nav className="flex-1 px-3 space-y-1" aria-label="Hauptnavigation">
-          {NAV_ITEMS.map((item) => {
+        <nav className="flex-1 px-3 space-y-1" aria-label="Main Navigation">
+          {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = highlightedTab === item.id;
             return (
@@ -188,7 +201,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             className="w-full min-h-[42px] flex items-center gap-2.5 px-3.5 rounded-2xl bg-[var(--accent-recovery)]/10 text-[var(--accent-recovery)] hover:bg-[var(--accent-recovery)]/15 text-[13px] font-medium transition-colors"
           >
             <Wind className="w-4 h-4 shrink-0" />
-            <span>HRV-Atemübung</span>
+            <span>{t.nav.breathworkAction}</span>
           </motion.button>
           <motion.button
             type="button"
@@ -200,7 +213,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             className="w-full min-h-[42px] flex items-center gap-2.5 px-3.5 rounded-2xl bg-[var(--bg-well)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-[13px] font-medium transition-colors"
           >
             <NotebookPen className="w-4 h-4 shrink-0" />
-            <span>Tages-Check-in</span>
+            <span>{t.nav.checkInAction}</span>
           </motion.button>
           <button
             type="button"
@@ -218,7 +231,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               <p className="text-xs font-semibold text-[var(--text-primary)] truncate">
                 {profile.displayName}
               </p>
-              <p className="text-[11px] text-[var(--text-muted)] truncate">100 % auf deinem Gerät</p>
+              <p className="text-[11px] text-[var(--text-muted)] truncate">{t.nav.localOnDevice}</p>
             </div>
           </button>
         </div>
@@ -253,7 +266,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             navVisible ? 'pointer-events-auto' : 'pointer-events-none'
           } liquid-glass rounded-full p-1.5 w-full max-w-[366px] grid grid-cols-5 items-center`}
         >
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = highlightedTab === item.id;
             return (
@@ -312,7 +325,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <button
               type="button"
               onClick={dismissToast}
-              aria-label="Hinweis schließen"
+              aria-label={t.common.close}
               className="p-1 rounded-full text-[var(--text-muted)] hover:text-[var(--text-primary)]"
             >
               <X className="w-3.5 h-3.5" />

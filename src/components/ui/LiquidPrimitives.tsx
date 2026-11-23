@@ -4,6 +4,8 @@ import { Wind, X, Play, Pause, RotateCcw } from 'lucide-react';
 import { SleepSession, SleepStageSegment } from '../../types/health';
 import { formatClockFromIso } from '../../utils/formatters';
 import { triggerHaptic } from '../../utils/haptics';
+import { useI18n } from '../../i18n/useI18n';
+import { getActiveBcp47 } from '../../i18n/translations';
 
 /**
  * Circular Mini Progress Ring used inside Home Bento Cards & Erholung Hero
@@ -220,13 +222,16 @@ const STAGE_SPEC: Record<
 };
 
 export const StepHypnogram: React.FC<{ session: SleepSession }> = ({ session }) => {
+  const { t, locale } = useI18n();
   const [activePhase, setActivePhase] = useState<SleepStageSegment['stage'] | null>(null);
   const [selectedSegIdx, setSelectedSegIdx] = useState<number | null>(null);
+
+  const stageLabel = (stage: SleepStageSegment['stage']) => t.sleep.stages[stage];
 
   if (!session.hasStageData || session.stages.length === 0) {
     return (
       <div className="rounded-2xl bg-[var(--bg-well)] p-4 text-xs text-[var(--text-secondary)]">
-        Für diese Nacht liegen nur Gesamtschlafdauer und Einschlaf-/Aufwachzeit vor.
+        {t.sleep.noData}
       </div>
     );
   }
@@ -237,7 +242,7 @@ export const StepHypnogram: React.FC<{ session: SleepSession }> = ({ session }) 
   );
   const bedMs = new Date(session.bedtimeIso).getTime();
   const formatOffset = (min: number) =>
-    new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(
+    new Intl.DateTimeFormat(getActiveBcp47(locale), { hour: '2-digit', minute: '2-digit' }).format(
       new Date(bedMs + min * 60000)
     );
 
@@ -259,10 +264,10 @@ export const StepHypnogram: React.FC<{ session: SleepSession }> = ({ session }) 
     <div className="space-y-4">
       <div className="grid grid-cols-[64px_1fr] gap-2 items-stretch">
         <div className="relative h-[136px] text-[11px] text-[var(--text-muted)] select-none">
-          <span className="absolute top-[6px] left-0">Wach</span>
-          <span className="absolute top-[38px] left-0">REM</span>
-          <span className="absolute top-[70px] left-0">Leicht</span>
-          <span className="absolute top-[102px] left-0">Tiefschlaf</span>
+          <span className="absolute top-[6px] left-0">{stageLabel('awake')}</span>
+          <span className="absolute top-[38px] left-0">{stageLabel('rem')}</span>
+          <span className="absolute top-[70px] left-0">{stageLabel('light')}</span>
+          <span className="absolute top-[102px] left-0">{stageLabel('deep')}</span>
         </div>
 
         <div className="relative">
@@ -357,12 +362,12 @@ export const StepHypnogram: React.FC<{ session: SleepSession }> = ({ session }) 
             <span>{formatClockFromIso(session.bedtimeIso)}</span>
             {selectedSeg ? (
               <span className="text-[var(--text-primary)] font-medium">
-                {STAGE_SPEC[selectedSeg.stage].label} · {formatOffset(selectedSeg.startOffsetMinutes)}–
-                {formatOffset(selectedSeg.startOffsetMinutes + selectedSeg.durationMinutes)} ({selectedSeg.durationMinutes} min)
+                {stageLabel(selectedSeg.stage)} · {formatOffset(selectedSeg.startOffsetMinutes)}–
+                {formatOffset(selectedSeg.startOffsetMinutes + selectedSeg.durationMinutes)} ({selectedSeg.durationMinutes} {t.common.unitMin})
               </span>
             ) : activePhase ? (
               <span className="text-[var(--text-primary)] font-medium">
-                {STAGE_SPEC[activePhase].label}: {Math.floor(stageTotals[activePhase] / 60)} h {stageTotals[activePhase] % 60} min
+                {stageLabel(activePhase)}: {Math.floor(stageTotals[activePhase] / 60)} h {stageTotals[activePhase] % 60} {t.common.unitMin}
               </span>
             ) : null}
             <span>{formatClockFromIso(session.wakeTimeIso)}</span>
@@ -396,7 +401,7 @@ export const StepHypnogram: React.FC<{ session: SleepSession }> = ({ session }) 
                 style={{ backgroundColor: spec.color }}
                 aria-hidden="true"
               />
-              <span>{spec.label}</span>
+              <span>{stageLabel(phase)}</span>
             </motion.button>
           );
         })}

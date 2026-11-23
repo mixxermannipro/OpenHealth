@@ -74,9 +74,12 @@
     letter-spacing: -0.025em;
   }
 
-  .font-mono,
+  .font-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
   .tabular-nums {
-    font-family: inherit;
     font-variant-numeric: tabular-nums;
   }
 }
@@ -116,6 +119,47 @@
 ::-webkit-scrollbar-thumb {
   background: rgba(142, 142, 147, 0.25);
   border-radius: 9999px;
+}
+
+/* Liquid Glass custom range input (used inside LiquidSlider) */
+.liquid-range-input {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.liquid-range-input::-webkit-slider-runnable-track {
+  height: 44px;
+  background: transparent;
+}
+.liquid-range-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  background: transparent;
+  border: 0;
+}
+.liquid-range-input::-moz-range-track {
+  height: 44px;
+  background: transparent;
+  border: 0;
+}
+.liquid-range-input::-moz-range-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  background: transparent;
+  border: 0;
+}
+
+/* Dark/light color-scheme harmony for native date inputs */
+.dark input[type='date'] {
+  color-scheme: dark;
+}
+input[type='date'] {
+  color-scheme: light;
 }
 
 @media (prefers-reduced-motion: reduce) {

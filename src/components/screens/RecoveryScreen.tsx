@@ -17,13 +17,17 @@ import {
   Tooltip,
   CartesianGrid,
 } from 'recharts';
+import { useShallow } from 'zustand/react/shallow';
 import { DailyDerivedSnapshot } from '../../types/health';
 import { useHealthStore } from '../../store/useHealthStore';
 import { computeHabitCorrelations } from '../../engine/calculations';
 import { ExplanationTopic } from '../../i18n/de';
+import { getActiveBcp47 } from '../../i18n/translations';
+import { useI18n } from '../../i18n/useI18n';
 import { InfoButton } from '../ui/InfoButton';
 import { CircularProgressRing } from '../ui/LiquidPrimitives';
 import { AnimatedNumber, SNAPPY_SPRING } from '../ui/MotionPrimitives';
+import { ONBOARDING_COPY } from '../../i18n/onboardingCopy';
 import { addDaysToKey, formatNumberDE } from '../../utils/formatters';
 import { haptics } from '../../utils/haptics';
 
@@ -47,37 +51,77 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
     hrvObservations,
     sleepSessions,
     journalEntries,
+    hydrationEntries,
     setDetailView,
-  } = useHealthStore();
+  } = useHealthStore(
+    useShallow((s) => ({
+      selectedDate: s.selectedDate,
+      hrvObservations: s.hrvObservations,
+      sleepSessions: s.sleepSessions,
+      journalEntries: s.journalEntries,
+      hydrationEntries: s.hydrationEntries,
+      setDetailView: s.setDetailView,
+    }))
+  );
 
+  const { t, locale } = useI18n();
   const [hrvWindow, setHrvWindow] = useState<HrvWindow>('week');
 
+  const obCopy = ONBOARDING_COPY[locale];
+  const hasRecoveryScore = snapshot.recovery.score !== null;
   const score = snapshot.recovery.score ?? 0;
   const readiness = snapshot.recovery.readinessCategory;
-  const isOptimal = score >= 70 || readiness === 'high_intensity_ok';
-  const isLow = score < 45 || readiness === 'easy_recovery' || readiness === 'rest_considered';
-  const ringColor = isOptimal
-    ? 'var(--accent-recovery)'
-    : isLow
-      ? 'var(--accent-strain)'
-      : 'var(--accent-calories)';
-  const statusLabel = isOptimal
-    ? 'Optimal'
-    : readiness === 'rest_considered'
-      ? 'Schonung'
+  const isOptimal = hasRecoveryScore && (score >= 70 || readiness === 'high_intensity_ok');
+  const isLow =
+    hasRecoveryScore && (score < 45 || readiness === 'easy_recovery' || readiness === 'rest_considered');
+  const ringColor = !hasRecoveryScore
+    ? 'var(--text-muted)'
+    : isOptimal
+      ? 'var(--accent-recovery)'
       : isLow
-        ? 'Niedrig'
-        : 'Moderat';
+        ? 'var(--accent-strain)'
+        : 'var(--accent-calories)';
+  const statusLabel = !hasRecoveryScore
+    ? obCopy.emptyState.waitingForData
+    : isOptimal
+      ? t.recovery.statusOptimal
+      : readiness === 'rest_considered'
+        ? t.recovery.statusRest
+        : isLow
+          ? t.recovery.statusLow
+          : t.recovery.statusModerate;
 
   const hrvDeltaStr =
-    snapshot.recovery.hrvDeltaPct !== null
-      ? `${snapshot.recovery.hrvDeltaPct >= 0 ? '+' : ''}${snapshot.recovery.hrvDeltaPct} %`
-      : 'Normal';
+    snapshot.recovery.hrvToday === null
+      ? '—'
+      : snapshot.recovery.hrvDeltaPct !== null
+        ? `${snapshot.recovery.hrvDeltaPct >= 0 ? '+' : ''}${snapshot.recovery.hrvDeltaPct} %`
+        : t.common.normal;
+  const hrvDeltaColor =
+    snapshot.recovery.hrvDeltaPct === null
+      ? 'text-[var(--text-secondary)]'
+      : snapshot.recovery.hrvDeltaPct >= -3
+        ? 'text-[var(--accent-recovery)]'
+        : snapshot.recovery.hrvDeltaPct >= -10
+          ? 'text-[var(--accent-calories)]'
+          : 'text-[var(--accent-strain)]';
+
   const rhrDeltaStr =
-    snapshot.recovery.rhrDeltaBpm !== null
-      ? `${snapshot.recovery.rhrDeltaBpm > 0 ? '+' : ''}${snapshot.recovery.rhrDeltaBpm} bpm`
-      : 'Normal';
-  const respRate = snapshot.activity?.respiratoryRateBpm ?? 13.8;
+    snapshot.recovery.rhrToday === null
+      ? '—'
+      : snapshot.recovery.rhrDeltaBpm !== null
+        ? `${snapshot.recovery.rhrDeltaBpm > 0 ? '+' : ''}${snapshot.recovery.rhrDeltaBpm} bpm`
+        : t.common.normal;
+  const rhrDeltaColor =
+    snapshot.recovery.rhrDeltaBpm === null
+      ? 'text-[var(--text-secondary)]'
+      : snapshot.recovery.rhrDeltaBpm <= 1
+        ? 'text-[var(--accent-recovery)]'
+        : snapshot.recovery.rhrDeltaBpm <= 3
+          ? 'text-[var(--accent-calories)]'
+          : 'text-[var(--accent-strain)]';
+
+  const respRate = snapshot.activity?.respiratoryRateBpm ?? null;
 
   const hrvChartData = useMemo(() => {
     const days = hrvWindow === 'week' ? 7 : hrvWindow === 'month' ? 30 : 120;
@@ -86,8 +130,9 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
       .filter((h) => h.date >= start && h.date <= selectedDate)
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    const wdFmt = new Intl.DateTimeFormat('de-DE', { weekday: 'short' });
-    const dtFmt = new Intl.DateTimeFormat('de-DE', { day: 'numeric', month: 'short' });
+    const bcp = getActiveBcp47(locale);
+    const wdFmt = new Intl.DateTimeFormat(bcp, { weekday: 'short' });
+    const dtFmt = new Intl.DateTimeFormat(bcp, { day: 'numeric', month: 'short' });
 
     return filtered.map((obs) => {
       const dt = new Date(`${obs.date}T12:00:00`);
@@ -100,19 +145,20 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
         hrv: obs.value,
       };
     });
-  }, [hrvObservations, selectedDate, hrvWindow]);
+  }, [hrvObservations, selectedDate, hrvWindow, locale]);
 
   const habitImpacts = useMemo(
-    () => computeHabitCorrelations(journalEntries, hrvObservations, sleepSessions),
-    [journalEntries, hrvObservations, sleepSessions]
+    () =>
+      computeHabitCorrelations(journalEntries, hrvObservations, sleepSessions, hydrationEntries),
+    [journalEntries, hrvObservations, sleepSessions, hydrationEntries]
   );
 
   const chartTitle =
     hrvWindow === 'week'
-      ? 'HRV, 7 Tage'
+      ? t.recovery.hrv7d
       : hrvWindow === 'month'
-        ? 'HRV, 30 Tage'
-        : 'HRV, Verlauf';
+        ? t.recovery.hrv30d
+        : t.recovery.hrvTrend;
 
   return (
     <motion.div
@@ -131,16 +177,16 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
               haptics.tick();
               setDetailView('none');
             }}
-            aria-label="Zurück zur Übersicht"
+            aria-label={t.recovery.backToOverview}
             className="w-10 h-10 -ml-2 rounded-full flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--bg-well)] transition-colors"
           >
             <ChevronLeft className="w-6 h-6" />
           </motion.button>
           <h1 className="text-[28px] font-bold tracking-tight text-[var(--text-primary)]">
-            Erholung
+            {t.recovery.title}
           </h1>
         </div>
-        <InfoButton label="Erholung" onClick={() => onExplain('recovery')} />
+        <InfoButton label={t.recovery.title} onClick={() => onExplain('recovery')} />
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
@@ -162,15 +208,22 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
               </span>
               <span
                 className={`mt-2 inline-flex items-center rounded-full px-3.5 py-1 text-xs font-semibold ${
-                  isOptimal
-                    ? 'bg-[var(--accent-recovery)]/16 text-[var(--accent-recovery)]'
-                    : isLow
-                      ? 'bg-[var(--accent-strain)]/16 text-[var(--accent-strain)]'
-                      : 'bg-[var(--accent-calories)]/16 text-[var(--accent-calories)]'
+                  !hasRecoveryScore
+                    ? 'bg-[var(--bg-well)] text-[var(--text-secondary)]'
+                    : isOptimal
+                      ? 'bg-[var(--accent-recovery)]/16 text-[var(--accent-recovery)]'
+                      : isLow
+                        ? 'bg-[var(--accent-strain)]/16 text-[var(--accent-strain)]'
+                        : 'bg-[var(--accent-calories)]/16 text-[var(--accent-calories)]'
                 }`}
               >
                 {statusLabel}
               </span>
+              {snapshot.recovery.isSubjectiveFallback && (
+                <span className="mt-1 text-[10.5px] font-medium text-[var(--text-muted)]">
+                  Check-in-Modus
+                </span>
+              )}
             </CircularProgressRing>
           </div>
 
@@ -182,7 +235,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                   <HeartPulse className="w-4 h-4 text-[var(--accent-hrv)]" />
                 </span>
                 <span className="text-[14.5px] font-medium text-[var(--text-primary)] truncate">
-                  Herzfrequenzvariabilität
+                  {t.recovery.hrvFull}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -190,7 +243,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                   <p className="text-[16px] font-semibold tabular-nums text-[var(--text-primary)] leading-tight">
                     {snapshot.recovery.hrvToday !== null ? `${snapshot.recovery.hrvToday} ms` : '—'}
                   </p>
-                  <p className="text-[12px] font-medium text-[var(--accent-recovery)]">
+                  <p className={`text-[12px] font-medium tabular-nums ${hrvDeltaColor}`}>
                     {hrvDeltaStr}
                   </p>
                 </div>
@@ -208,7 +261,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                   <Heart className="w-4 h-4 text-[var(--accent-strain)]" />
                 </span>
                 <span className="text-[14.5px] font-medium text-[var(--text-primary)] truncate">
-                  Ruhepuls
+                  {t.recovery.rhr}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -216,12 +269,12 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                   <p className="text-[16px] font-semibold tabular-nums text-[var(--text-primary)] leading-tight">
                     {snapshot.recovery.rhrToday !== null ? `${snapshot.recovery.rhrToday} bpm` : '—'}
                   </p>
-                  <p className="text-[12px] font-medium text-[var(--accent-recovery)]">
+                  <p className={`text-[12px] font-medium tabular-nums ${rhrDeltaColor}`}>
                     {rhrDeltaStr}
                   </p>
                 </div>
                 <InfoButton
-                  label="Ruhepuls"
+                  label={t.recovery.rhr}
                   onClick={() => onExplain('rhr')}
                   className="!min-h-[30px] !min-w-[30px]"
                 />
@@ -234,18 +287,20 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                   <Wind className="w-4 h-4 text-[var(--accent-recovery)]" />
                 </span>
                 <span className="text-[14.5px] font-medium text-[var(--text-primary)] truncate">
-                  Atemfrequenz
+                  {t.recovery.respRate}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <div className="text-right">
                   <p className="text-[16px] font-semibold tabular-nums text-[var(--text-primary)] leading-tight">
-                    {formatNumberDE(respRate, 1)} /min
+                    {respRate !== null ? `${formatNumberDE(respRate, 1)} /min` : '—'}
                   </p>
-                  <p className="text-[12px] font-medium text-[var(--text-secondary)]">Normal</p>
+                  <p className="text-[12px] font-medium text-[var(--text-secondary)]">
+                    {respRate !== null ? t.common.normal : '—'}
+                  </p>
                 </div>
                 <InfoButton
-                  label="Atemfrequenz"
+                  label={t.recovery.respRate}
                   onClick={() => onExplain('biometrics')}
                   className="!min-h-[30px] !min-w-[30px]"
                 />
@@ -269,9 +324,11 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-[var(--text-primary)] truncate">
-                  HRV-Atmung
+                  {t.recovery.breathingTitle}
                 </p>
-                <p className="text-[11px] text-[var(--text-muted)] truncate">5,5 s Resonanz</p>
+                <p className="text-[11px] text-[var(--text-muted)] truncate">
+                  {t.recovery.breathingSub}
+                </p>
               </div>
             </motion.button>
             <motion.button
@@ -288,10 +345,10 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
               </span>
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-[var(--text-primary)] truncate">
-                  Gefühl heute
+                  {t.recovery.feelingTitle}
                 </p>
                 <p className="text-[11px] text-[var(--text-muted)] truncate">
-                  {snapshot.journal ? 'Check-in anpassen' : 'Jetzt bewerten (18 %)'}
+                  {snapshot.journal ? t.recovery.feelingEdit : t.recovery.feelingNow}
                 </p>
               </div>
             </motion.button>
@@ -301,7 +358,7 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
           {snapshot.recovery.subjectiveAlignmentNote && (
             <div className="apple-card p-4 space-y-1.5 border-[var(--accent-calories)]/25">
               <p className="text-xs font-semibold text-[var(--accent-calories)]">
-                Objektiv vs. Dein Gefühl
+                {t.recovery.objectiveVsFeeling}
               </p>
               <p className="text-[12.5px] leading-relaxed text-[var(--text-secondary)]">
                 {snapshot.recovery.subjectiveAlignmentNote}
@@ -319,15 +376,15 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
                 <h2 className="text-[16px] font-semibold text-[var(--text-primary)]">
                   {chartTitle}
                 </h2>
-                <InfoButton label="HRV-Verlauf" onClick={() => onExplain('recoveryTrend')} />
+                <InfoButton label={chartTitle} onClick={() => onExplain('recoveryTrend')} />
               </div>
 
               <div className="inline-flex rounded-full bg-[var(--bg-well)] p-1">
                 {(
                   [
-                    { id: 'week', label: 'Woche' },
-                    { id: 'month', label: 'Monat' },
-                    { id: 'year', label: 'Jahr' },
+                    { id: 'week', label: t.recovery.week },
+                    { id: 'month', label: t.recovery.month },
+                    { id: 'year', label: t.recovery.year },
                   ] as const
                 ).map((tab) => {
                   const active = hrvWindow === tab.id;
@@ -362,53 +419,64 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
             </div>
 
             <div className="h-[196px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={hrvChartData} margin={{ top: 8, right: 6, left: -22, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="hrvGreenFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#5CE17C" stopOpacity={0.32} />
-                      <stop offset="100%" stopColor="#5CE17C" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid
-                    vertical={false}
-                    stroke="var(--border-hairline)"
-                    strokeDasharray="3 3"
-                  />
-                  <XAxis
-                    dataKey="label"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#717580', fontSize: 11 }}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: '#717580', fontSize: 11 }}
-                    domain={['dataMin - 8', 'dataMax + 6']}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'var(--bg-elevated)',
-                      border: '1px solid var(--border-hairline)',
-                      borderRadius: 14,
-                      fontSize: 12,
-                      color: 'var(--text-primary)',
-                    }}
-                    formatter={(val: unknown) => [`${val} ms`, 'HRV (RMSSD)']}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="hrv"
-                    stroke="#5CE17C"
-                    strokeWidth={2.5}
-                    fill="url(#hrvGreenFill)"
-                    dot={false}
-                    activeDot={{ r: 4.5, fill: '#5CE17C', stroke: 'var(--bg-canvas)', strokeWidth: 2 }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {hrvChartData.length === 0 ? (
+                <div className="h-full rounded-2xl bg-[var(--bg-well)]/45 border border-dashed border-[var(--border-hairline)] flex flex-col items-center justify-center px-5 text-center">
+                  <p className="text-sm font-medium text-[var(--text-primary)]">
+                    {obCopy.emptyState.waitingForData}
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)] max-w-xs">
+                    {obCopy.emptyState.startCardDesc}
+                  </p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={hrvChartData} margin={{ top: 8, right: 6, left: -22, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="hrvGreenFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#5CE17C" stopOpacity={0.32} />
+                        <stop offset="100%" stopColor="#5CE17C" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid
+                      vertical={false}
+                      stroke="var(--border-hairline)"
+                      strokeDasharray="3 3"
+                    />
+                    <XAxis
+                      dataKey="label"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#717580', fontSize: 11 }}
+                      interval="preserveStartEnd"
+                    />
+                    <YAxis
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: '#717580', fontSize: 11 }}
+                      domain={['dataMin - 8', 'dataMax + 6']}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'var(--bg-elevated)',
+                        border: '1px solid var(--border-hairline)',
+                        borderRadius: 14,
+                        fontSize: 12,
+                        color: 'var(--text-primary)',
+                      }}
+                      formatter={(val: unknown) => [`${val} ms`, 'HRV (RMSSD)']}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="hrv"
+                      stroke="#5CE17C"
+                      strokeWidth={2.5}
+                      fill="url(#hrvGreenFill)"
+                      dot={false}
+                      activeDot={{ r: 4.5, fill: '#5CE17C', stroke: 'var(--bg-canvas)', strokeWidth: 2 }}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -416,9 +484,9 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
           <div className="apple-card p-5 space-y-3.5">
             <div className="flex items-center justify-between">
               <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
-                Zusammensetzung heute
+                {t.recovery.breakdownTitle}
               </h2>
-              <InfoButton label="Einflussfaktoren" onClick={() => onExplain('recoveryFactors')} />
+              <InfoButton label={t.recovery.breakdownTitle} onClick={() => onExplain('recoveryFactors')} />
             </div>
 
             <div className="space-y-3">
@@ -448,42 +516,86 @@ export const RecoveryScreen: React.FC<RecoveryScreenProps> = ({
             </div>
           </div>
 
-          {/* Habit Impact Correlations */}
-          {habitImpacts.length > 0 && (
-            <div className="apple-card p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-[var(--accent-recovery)]" />
-                  <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
-                    Was deine Erholung beeinflusst
+          {/* WHOOP-style Habit Impact Correlations ("Was hilft meiner Erholung?") */}
+          <div className="apple-card p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <TrendingUp className="w-4 h-4 text-[var(--accent-recovery)] shrink-0" />
+                <div className="min-w-0">
+                  <h2 className="text-[15px] font-semibold text-[var(--text-primary)] truncate">
+                    Was hilft meiner Erholung?
                   </h2>
+                  <p className="text-[11px] text-[var(--text-muted)]">
+                    Auswertung deiner Check-in-Tags gegen den nächsten Morgen
+                  </p>
                 </div>
-                <InfoButton label="Gewohnheiten" onClick={() => onExplain('correlations')} />
               </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.tick();
+                    onOpenJournal();
+                  }}
+                  className="min-h-[30px] rounded-full bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] px-2.5 text-[11px] font-medium text-[var(--text-primary)] transition-colors"
+                >
+                  + Tag
+                </button>
+                <InfoButton label={t.recovery.habitsTitle} onClick={() => onExplain('correlations')} />
+              </div>
+            </div>
 
+            {habitImpacts.length === 0 ? (
+              <div className="rounded-2xl bg-[var(--bg-well)]/55 border border-dashed border-[var(--border-hairline)] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Markiere im Tages-Check-in Gewohnheiten wie Magnesium, spätes Essen oder Alkohol.
+                  Ab je 2 Tagen mit und ohne Tag berechnet KADENZ den echten Effekt auf deine
+                  Folgetags-Erholung.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    haptics.tick();
+                    onOpenJournal();
+                  }}
+                  className="shrink-0 min-h-[36px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] px-3.5 text-xs font-semibold"
+                >
+                  Check-in öffnen
+                </button>
+              </div>
+            ) : (
               <div className="divide-y divide-[var(--border-hairline)]">
                 {habitImpacts.map((h) => (
-                  <div key={h.id} className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
+                  <div
+                    key={h.id}
+                    className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between gap-3"
+                  >
                     <div className="min-w-0">
                       <p className="text-[13.5px] font-medium text-[var(--text-primary)]">
                         {h.habit}
                       </p>
                       <p className="text-[11.5px] text-[var(--text-muted)]">{h.explanation}</p>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums ${
-                        h.impactPct >= 0
-                          ? 'bg-[var(--accent-recovery)]/15 text-[var(--accent-recovery)]'
-                          : 'bg-[var(--accent-strain)]/15 text-[var(--accent-strain)]'
-                      }`}
-                    >
-                      {h.impactPct >= 0 ? `+${h.impactPct}%` : `${h.impactPct}%`}
-                    </span>
+                    {h.ready && h.impactPct !== null ? (
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums ${
+                          h.impactPct >= 0
+                            ? 'bg-[var(--accent-recovery)]/15 text-[var(--accent-recovery)]'
+                            : 'bg-[var(--accent-strain)]/15 text-[var(--accent-strain)]'
+                        }`}
+                      >
+                        {h.impactPct >= 0 ? `+${h.impactPct}%` : `${h.impactPct}%`}
+                      </span>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-[var(--bg-well)] px-2.5 py-1 text-[11px] font-medium tabular-nums text-[var(--text-secondary)]">
+                        {Math.min(h.withCount ?? 0, h.withoutCount ?? 0)}/{h.minRequiredPerGroup ?? 2} Tage
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </motion.div>

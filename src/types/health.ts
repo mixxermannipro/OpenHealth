@@ -27,6 +27,7 @@ export type DataQualityLevel = 'high' | 'moderate' | 'low' | 'missing';
 export type ConfidenceLevel = 'good' | 'limited' | 'insufficient';
 export type MeasurementProvenance = 'measured' | 'wearable_estimate' | 'app_estimate' | 'missing';
 export type ThemePreference = 'system' | 'light' | 'dark';
+export type AppLocale = 'de' | 'en' | 'es' | 'fr' | 'it';
 export type DemoScenarioId = 'balanced' | 'fatigued' | 'recovering';
 export type DashboardFocus = 'general' | 'endurance' | 'recovery' | 'sleep';
 
@@ -51,20 +52,43 @@ export type GoalOption =
   | 'general_fitness';
 
 export type NutritionGoalMode = 'cut' | 'maintain' | 'build';
+export type DailyLifestyleNeat = 'sedentary' | 'mixed' | 'active_job';
+export type ManualActivityPal = 'sedentary' | 'light' | 'moderate' | 'very_active' | 'athlete';
 
 export type MealCategory = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 
 export type AIProviderId = 'gemini' | 'claude' | 'openai' | 'openrouter' | 'ollama';
 
 export interface AIPrivacySettings {
-  provider: AIProviderId;
-  apiKey: string;
-  ollamaUrl: string;
-  ollamaModel: string;
+  provider?: AIProviderId;
   localRecommendationsOnly: boolean;
   sendPhotosOnDemandOnly: boolean;
   localProcessingOnly: boolean;
   backgroundSync: boolean;
+}
+
+export type HabitTagId =
+  | 'late_meal'
+  | 'late_caffeine'
+  | 'alcohol'
+  | 'magnesium'
+  | 'sauna_cold'
+  | 'screen_free'
+  | 'stretching'
+  | 'hydrated';
+
+export interface FavoriteMeal {
+  id: string;
+  title: string;
+  category: MealCategory;
+  totalCalories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  fiberG: number;
+  useCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MealFoodItem {
@@ -105,6 +129,32 @@ export interface HydrationEntry {
   updatedAt: string;
 }
 
+export interface WeightTrendPoint {
+  date: string;
+  label: string;
+  rawWeightKg: number | null;
+  trendWeightKg: number;
+}
+
+export interface AdaptiveCalorieCoach {
+  points: WeightTrendPoint[];
+  latestRawWeightKg: number | null;
+  latestTrendWeightKg: number | null;
+  weeklyTrendRateKg: number | null;
+  targetWeeklyRateKg: number;
+  loggedWeightDays14d: number;
+  loggedMealDays14d: number;
+  minRequiredDays: number;
+  hasEnoughData: boolean;
+  avgDailyIntakeKcal: number | null;
+  estimatedTdeeKcal: number | null;
+  suggestedAdjustmentKcal: number; // 0 when on track, clamped [-200, +200]
+  suggestedDailyTargetKcal: number | null;
+  status: 'collecting' | 'on_track' | 'faster_than_goal' | 'slower_than_goal';
+  headline: string;
+  summary: string;
+}
+
 export interface NutritionTargets {
   caloriesKcal: number;
   proteinG: number;
@@ -112,8 +162,15 @@ export interface NutritionTargets {
   fatG: number;
   fiberG: number;
   bmrKcal: number;
+  baseNeedKcal: number;
   activeBonusKcal: number;
+  totalExpenditureKcal: number;
+  goalDeltaKcal: number;
+  usesWearableActiveCalories: boolean;
   goalMode: NutritionGoalMode;
+  weeklyWeightChangeKg: number;
+  estimatedWeeksToGoal: number | null;
+  estimatedGoalDateIso: string | null;
 }
 
 export interface RunningTargets {
@@ -126,9 +183,12 @@ export interface RunningTargets {
 export interface UserProfile {
   id: string;
   displayName: string;
+  birthDate?: string; // YYYY-MM-DD — source of truth for dynamic chronological age
   age: number;
   heightCm: number;
   weightKg: number;
+  targetWeightKg?: number;
+  weeklyWeightChangeKg?: number; // signed kg/week (e.g. -0.5 cut, 0 maintain, +0.25 build)
   biologicalSex?: 'female' | 'male' | 'diverse' | 'unspecified';
   restingHrBaselineManual?: number;
   maxHr: number;
@@ -141,6 +201,11 @@ export interface UserProfile {
   preferredBedtime: string;
   preferredWakeTime: string;
   nutritionGoalMode?: NutritionGoalMode;
+  nutritionGoalDeltaKcal?: number;
+  usesWearableActiveCalories?: boolean;
+  dailyLifestyleNeat?: DailyLifestyleNeat;
+  manualActivityPal?: ManualActivityPal;
+  nutritionOnboardingCompleted?: boolean;
   customCalorieTarget?: number;
   goals: GoalOption[];
   runningTargets: RunningTargets;
@@ -296,6 +361,7 @@ export interface JournalEntry {
   caffeineMg?: number;
   illnessSymptoms?: boolean;
   hydrationLiters?: number;
+  habitTags?: HabitTagId[];
   notes?: string;
 }
 
@@ -356,6 +422,7 @@ export interface RecoveryAssessment {
   objectiveOnlyScore?: number | null;
   subjectiveScore?: number | null;
   subjectiveAlignmentNote?: string;
+  isSubjectiveFallback?: boolean;
 }
 
 export interface SleepAssessment {
@@ -510,8 +577,13 @@ export interface SimulationResult {
 export interface HabitImpactSummary {
   id: string;
   habit: string;
-  impactPct: number;
+  impactPct: number | null;
   sampleCount: number;
+  withCount?: number;
+  withoutCount?: number;
+  minRequiredPerGroup?: number;
+  metricLabel?: string;
+  ready?: boolean;
   explanation: string;
 }
 
@@ -531,4 +603,5 @@ export interface AppExportPayload {
   journalEntries: JournalEntry[];
   meals?: MealEntry[];
   hydrationEntries?: HydrationEntry[];
+  favoriteMeals?: FavoriteMeal[];
 }

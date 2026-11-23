@@ -1,1142 +1,1254 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import {
-  X,
-  Camera,
-  ScanLine,
-  Mic,
-  MicOff,
-  ScanBarcode,
-  Search,
-  Cpu,
-  Plus,
-  Minus,
-  Trash2,
-  Loader2,
-  Upload,
+  AlertTriangle,
+  Barcode,
   Check,
-  Utensils,
-  Clock,
+  CheckCircle2,
+  ClipboardPaste,
+  Copy,
+  Edit3,
+  Loader2,
+  Search,
+  Share2,
+  Sparkles,
+  Camera,
+  CameraOff,
 } from 'lucide-react';
-import { triggerHaptic } from '../../utils/haptics';
-import { MealCategory, MealFoodItem } from '../../types/health';
+import { useShallow } from 'zustand/react/shallow';
+import { MealCategory, MealEntry } from '../../types/health';
 import { useHealthStore } from '../../store/useHealthStore';
-import { buildMealEntryFromItems } from '../../engine/nutrition';
+import { computeAtwaterCalories, inferMealCategoryByHour } from '../../engine/nutrition';
 import {
-  FoodSearchResult,
-  foodResultToMealItem,
+  getZeroCostAiPromptTemplate,
+  parseAiMealInput,
+  ParsedAiMeal,
+} from '../../engine/aiMealParser';
+import {
+  FoodCatalogProduct,
+  LOCAL_GERMAN_FOODS,
   lookupBarcodeOpenFoodFacts,
-  searchLocalFoods,
   searchOpenFoodFacts,
 } from '../../services/openFoodFacts';
-import {
-  AI_PROVIDER_LABELS,
-  AIAnalysisProgress,
-  analyzeMealWithAI,
-} from '../../services/aiNutrition';
-import { AnimatedNumber } from '../ui/MotionPrimitives';
-import { formatNumberDE } from '../../utils/formatters';
+import { IncomingSharePayload } from '../../services/mealShareReceiver';
+import { BottomSheet } from '../ui/BottomSheet';
+import { SNAPPY_SPRING } from '../ui/MotionPrimitives';
+import { haptics } from '../../utils/haptics';
+import { useI18n } from '../../i18n/useI18n';
 
-export type MealModalMode = 'ai' | 'voice' | 'barcode' | 'search';
+export type MealModalMode = 'ai' | 'scan' | 'search' | 'manual';
 
 interface MealAnalyzeModalProps {
   open: boolean;
   initialMode: MealModalMode;
   initialCategory?: MealCategory;
+  editingMeal?: MealEntry | null;
+  initialSharePayload?: IncomingSharePayload | null;
+  onConsumeSharePayload?: () => void;
   onClose: () => void;
 }
 
-const DEFAULT_DEMO_ITEMS: MealFoodItem[] = [
-  {
-    id: 'demo_oats',
-    name: 'Haferflocken',
-    grams: 80,
-    calories: 304,
-    proteinG: 10.8,
-    carbsG: 47.0,
-    fatG: 5.6,
-    fiberG: 8.0,
-    source: 'ai',
-  },
-  {
-    id: 'demo_blueberries',
-    name: 'Blaubeeren',
-    grams: 60,
-    calories: 34,
-    proteinG: 0.4,
-    carbsG: 8.7,
-    fatG: 0.2,
-    fiberG: 1.4,
-    source: 'ai',
-  },
-  {
-    id: 'demo_yogurt',
-    name: 'Griechischer Joghurt',
-    grams: 150,
-    calories: 135,
-    proteinG: 13.5,
-    carbsG: 5.4,
-    fatG: 7.5,
-    fiberG: 0,
-    source: 'ai',
-  },
-];
-
-const DEFAULT_PREVIEW_PHOTO = '/src/assets/images/meal_oatmeal_berries_1795248984774.jpg';
-
-const CATEGORY_OPTIONS: { id: MealCategory; label: string }[] = [
-  { id: 'breakfast', label: 'Frühstück' },
-  { id: 'lunch', label: 'Mittag' },
-  { id: 'dinner', label: 'Abend' },
-  { id: 'snack', label: 'Snack' },
-];
+const SLOTS: MealCategory[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
 export const MealAnalyzeModal: React.FC<MealAnalyzeModalProps> = ({
   open,
   initialMode,
   initialCategory,
+  editingMeal,
+  initialSharePayload,
+  onConsumeSharePayload,
   onClose,
 }) => {
-  const { selectedDate, meals, aiPrivacy, addMealEntry, setDetailView, setActiveTab } =
-    useHealthStore();
+  const { selectedDate, addMealEntry, updateMealEntry, showToast } = useHealthStore(
+    useShallow((s) => ({
+      selectedDate: s.selectedDate,
+      addMealEntry: s.addMealEntry,
+      updateMealEntry: s.updateMealEntry,
+      showToast: s.showToast,
+    }))
+  );
+  const { t, locale } = useI18n();
 
   const [mode, setMode] = useState<MealModalMode>(initialMode);
-  const [category, setCategory] = useState<MealCategory>('breakfast');
-  const [previewPhoto, setPreviewPhoto] = useState<string>(DEFAULT_PREVIEW_PHOTO);
-  const [uploadedPhotoDataUrl, setUploadedPhotoDataUrl] = useState<string | null>(null);
-  const [description, setDescription] = useState('');
-  const [items, setItems] = useState<MealFoodItem[]>(DEFAULT_DEMO_ITEMS);
-  const [editingItems, setEditingItems] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState<AIAnalysisProgress | null>(null);
-  const analysisAbortRef = useRef<AbortController | null>(null);
-  const [statusNote, setStatusNote] = useState<string>('Analyse mit deinem eigenen API-Key');
-  const [errorText, setErrorText] = useState<string | null>(null);
+  const [category, setCategory] = useState<MealCategory>(
+    initialCategory ?? inferMealCategoryByHour()
+  );
 
-  // Voice state
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  // Zero-Cost KI-Import (Share-Intent / Clipboard) state
+  const [rawAiInput, setRawAiInput] = useState('');
+  const [shareOriginBanner, setShareOriginBanner] = useState<
+    'share_intent' | 'deeplink' | 'clipboard' | null
+  >(null);
+  const [promptCopied, setPromptCopied] = useState(false);
+  const [clipboardFeedback, setClipboardFeedback] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [draftCalories, setDraftCalories] = useState('');
+  const [draftProtein, setDraftProtein] = useState('');
+  const [draftCarbs, setDraftCarbs] = useState('');
+  const [draftFat, setDraftFat] = useState('');
+  const [draftFiber, setDraftFiber] = useState('');
+  const aiTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Barcode state
+  // Barcode scan state
   const [barcodeInput, setBarcodeInput] = useState('');
-  const [barcodeBusy, setBarcodeBusy] = useState(false);
+  const [barcodeLoading, setBarcodeLoading] = useState(false);
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
+  const [scannedProduct, setScannedProduct] = useState<FoodCatalogProduct | null>(null);
+  const [scannedGrams, setScannedGrams] = useState(100);
   const [cameraActive, setCameraActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Search + Manual Quick-Calorie state
+  // Search state
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<FoodSearchResult[]>(() => searchLocalFoods(''));
-  const [searching, setSearching] = useState(false);
-  const [remoteUsed, setRemoteUsed] = useState(false);
-  const [showQuickManual, setShowQuickManual] = useState(false);
+  const [searchResults, setSearchResults] = useState<FoodCatalogProduct[]>(LOCAL_GERMAN_FOODS);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [selectedFood, setSelectedFood] = useState<FoodCatalogProduct | null>(null);
+  const [selectedFoodGrams, setSelectedFoodGrams] = useState(100);
+
+  // Manual entry state
   const [manualName, setManualName] = useState('');
   const [manualKcal, setManualKcal] = useState('');
-  const [manualProtein, setManualProtein] = useState('');
+  const [manualP, setManualP] = useState('');
+  const [manualC, setManualC] = useState('');
+  const [manualF, setManualF] = useState('');
+  const [manualFiber, setManualFiber] = useState('');
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const promptTemplate = useMemo(() => getZeroCostAiPromptTemplate(locale), [locale]);
 
-  // Recent unique meal items for 1-tap MyFitnessPal/Yazio repeat
-  const recentQuickItems = useMemo(() => {
-    const seen = new Set<string>();
-    const out: MealFoodItem[] = [];
-    for (const m of meals) {
-      for (const item of m.items) {
-        const key = item.name.toLowerCase();
-        if (!seen.has(key)) {
-          seen.add(key);
-          out.push(item);
-        }
-        if (out.length >= 5) return out;
-      }
-    }
-    return out;
-  }, [meals]);
+  const parsedAiResult = useMemo(() => {
+    if (!rawAiInput.trim()) return null;
+    return parseAiMealInput(rawAiInput);
+  }, [rawAiInput]);
 
+  // Reset modal state on open, edit meal, or incoming Share-Intent / Deep-Link
   useEffect(() => {
-    if (open) {
-      setMode(initialMode);
-      setErrorText(null);
-      setEditingItems(false);
-      setShowQuickManual(false);
-      setAnalysisProgress(null);
-      if (initialCategory) {
-        setCategory(initialCategory);
-      } else {
-        const hour = new Date().getHours();
-        setCategory(hour < 11 ? 'breakfast' : hour < 15 ? 'lunch' : hour < 18 ? 'snack' : 'dinner');
-      }
+    if (!open) {
+      stopCamera();
+      setShareOriginBanner(null);
+      return;
+    }
+
+    if (editingMeal) {
+      setMode('manual');
+      setCategory(editingMeal.category);
+      setManualName(editingMeal.title);
+      setManualKcal(String(editingMeal.totalCalories));
+      setManualP(String(editingMeal.proteinG));
+      setManualC(String(editingMeal.carbsG));
+      setManualF(String(editingMeal.fatG));
+      setManualFiber(editingMeal.fiberG !== undefined ? String(editingMeal.fiberG) : '');
+    } else if (initialSharePayload?.rawText) {
+      setMode('ai');
+      setRawAiInput(initialSharePayload.rawText);
+      setShareOriginBanner(initialSharePayload.origin);
+      setCategory(initialCategory ?? inferMealCategoryByHour());
+      onConsumeSharePayload?.();
     } else {
-      analysisAbortRef.current?.abort();
-      analysisAbortRef.current = null;
-      stopCamera();
-      stopVoice();
+      setMode(initialMode);
+      setCategory(initialCategory ?? inferMealCategoryByHour());
+      setManualName('');
+      setManualKcal('');
+      setManualP('');
+      setManualC('');
+      setManualF('');
+      setManualFiber('');
     }
-  }, [open, initialMode, initialCategory]);
+    setClipboardFeedback(null);
+    setBarcodeError(null);
+    setSelectedFood(null);
+    setScannedProduct(null);
+  }, [open, initialMode, initialCategory, editingMeal, initialSharePayload, onConsumeSharePayload]);
 
-  // Escape key & body scroll lock
+  // Synchronize editable review fields whenever the parser yields a valid meal
   useEffect(() => {
-    if (!open) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open, onClose]);
-
-  useEffect(() => {
-    return () => {
-      stopCamera();
-      stopVoice();
-    };
-  }, []);
-
-  // Debounced live Open Food Facts search
-  useEffect(() => {
-    if (!open || mode !== 'search') return;
-    const handle = window.setTimeout(async () => {
-      if (searchQuery.trim().length < 2) {
-        setSearchResults(searchLocalFoods(searchQuery));
-        setRemoteUsed(false);
-        return;
+    if (parsedAiResult && parsedAiResult.ok) {
+      const d: ParsedAiMeal = parsedAiResult.data;
+      setDraftName(d.meal);
+      setDraftCalories(String(d.calories));
+      setDraftProtein(String(d.proteinG));
+      setDraftCarbs(String(d.carbsG));
+      setDraftFat(String(d.fatG));
+      setDraftFiber(String(d.fiberG));
+      if (d.category && !initialCategory) {
+        setCategory(d.category);
       }
-      setSearching(true);
-      const res = await searchOpenFoodFacts(searchQuery);
-      setSearchResults(res.results);
-      setRemoteUsed(res.remoteUsed);
-      setSearching(false);
-    }, 320);
-    return () => window.clearTimeout(handle);
-  }, [searchQuery, open, mode]);
+    }
+  }, [parsedAiResult, initialCategory]);
 
-  const totals = useMemo(() => {
-    const kcal = Math.round(items.reduce((a, i) => a + i.calories, 0));
-    const protein = Math.round(items.reduce((a, i) => a + i.proteinG, 0));
-    const carbs = Math.round(items.reduce((a, i) => a + i.carbsG, 0));
-    const fat = Math.round(items.reduce((a, i) => a + i.fatG, 0));
-    return { kcal, protein, carbs, fat };
-  }, [items]);
+  // Debounced Open Food Facts search
+  useEffect(() => {
+    if (mode !== 'search' || !open) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setSearchLoading(true);
+      const list = await searchOpenFoodFacts(searchQuery);
+      if (active) {
+        setSearchResults(list);
+        setSearchLoading(false);
+      }
+    }, 260);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, mode, open]);
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach((tr) => tr.stop());
       streamRef.current = null;
     }
     setCameraActive(false);
   };
 
-  const stopVoice = () => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch {
-        // ignore
-      }
-      recognitionRef.current = null;
+  useEffect(() => {
+    if (mode !== 'scan') {
+      stopCamera();
     }
-    setListening(false);
-  };
+    return () => stopCamera();
+  }, [mode]);
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setPreviewPhoto(reader.result);
-        setUploadedPhotoDataUrl(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const cancelAIAnalysis = () => {
-    analysisAbortRef.current?.abort();
-    analysisAbortRef.current = null;
-    setAnalyzing(false);
-    setAnalysisProgress(null);
-  };
-
-  const runAIAnalysis = async (customText?: string) => {
-    const textToUse = customText !== undefined ? customText : description;
-    analysisAbortRef.current?.abort();
-    const controller = new AbortController();
-    analysisAbortRef.current = controller;
-
-    setAnalyzing(true);
-    setErrorText(null);
-    setAnalysisProgress({
-      percent: 8,
-      stage: 'preparing',
-      label: uploadedPhotoDataUrl ? 'Foto wird vorbereitet…' : 'Analyse startet…',
-      detail: hasKey ? AI_PROVIDER_LABELS[aiPrivacy.provider] : 'Lokale Erkennung',
-      isLiveStream: hasKey,
-    });
+  const handleCopyPrompt = async () => {
     try {
-      const result = await analyzeMealWithAI({
-        description: textToUse,
-        imageDataUrl: uploadedPhotoDataUrl,
-        settings: aiPrivacy,
-        signal: controller.signal,
-        onProgress: (p) => setAnalysisProgress(p),
-      });
-      setItems(result.items);
-      setStatusNote(result.note || result.providerLabel);
-      triggerHaptic('success');
-      window.setTimeout(() => {
-        setAnalysisProgress((curr) => (curr?.stage === 'done' ? null : curr));
-      }, 1400);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        setAnalysisProgress(null);
-      } else {
-        setAnalysisProgress(null);
-        setErrorText(err instanceof Error ? err.message : 'Analyse fehlgeschlagen.');
-      }
-    } finally {
-      if (analysisAbortRef.current === controller) {
-        analysisAbortRef.current = null;
-      }
-      setAnalyzing(false);
+      await navigator.clipboard.writeText(promptTemplate);
+      haptics.success();
+      setPromptCopied(true);
+      showToast('KI-Prompt in die Zwischenablage kopiert.', 'success');
+      window.setTimeout(() => setPromptCopied(false), 2400);
+    } catch {
+      haptics.tick();
+      showToast('Prompt konnte nicht automatisch kopiert werden.', 'warning');
     }
   };
 
-  const toggleVoiceInput = () => {
-    if (listening) {
-      stopVoice();
+  const handlePasteFromClipboard = async () => {
+    setClipboardFeedback(null);
+    try {
+      if (!navigator.clipboard?.readText) {
+        throw new Error('clipboard_unavailable');
+      }
+      const clipText = await navigator.clipboard.readText();
+      if (!clipText || !clipText.trim()) {
+        haptics.warning();
+        setClipboardFeedback('Zwischenablage ist leer. Kopiere zuerst die Antwort aus deiner KI-App.');
+        return;
+      }
+      haptics.success();
+      setRawAiInput(clipText);
+      setShareOriginBanner('clipboard');
+    } catch {
+      haptics.tick();
+      setClipboardFeedback(
+        'Browser blockiert direkten Zugriff — tippe in das Textfeld und füge dort ein (Strg+V / Einfügen).'
+      );
+      aiTextareaRef.current?.focus();
+    }
+  };
+
+  const handleSaveParsedAiMeal = async () => {
+    const cleanTitle = draftName.trim() || 'KI-Mahlzeit';
+    const rawKcal = Math.max(0, Math.round(Number(draftCalories) || 0));
+    const p = Math.max(0, Math.round(Number(draftProtein) || 0));
+    const c = Math.max(0, Math.round(Number(draftCarbs) || 0));
+    const f = Math.max(0, Math.round(Number(draftFat) || 0));
+    const fib = Math.max(0, Math.round(Number(draftFiber) || 0));
+    const kcal = rawKcal > 0 ? rawKcal : computeAtwaterCalories(p, c, f);
+
+    if (kcal <= 0 && p <= 0 && c <= 0 && f <= 0) {
+      haptics.warning();
       return;
     }
-    const SpeechRec =
-      (window as unknown as Record<string, unknown>).SpeechRecognition ||
-      (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
 
-    if (!SpeechRec) {
-      setErrorText(
-        'Spracherkennung wird in diesem Browser nicht unterstützt. Tippe deine Mahlzeit einfach ins Textfeld.'
+    const parsedItems =
+      parsedAiResult && parsedAiResult.ok && parsedAiResult.data.items.length > 0
+        ? parsedAiResult.data.items.map((it, idx) => ({
+            id: `ai_item_${Date.now()}_${idx}`,
+            name: it.name,
+            grams: it.grams,
+            calories: it.calories,
+            proteinG: it.proteinG,
+            carbsG: it.carbsG,
+            fatG: it.fatG,
+            fiberG: it.fiberG,
+            source: 'ai' as const,
+          }))
+        : [
+            {
+              id: `ai_item_${Date.now()}`,
+              name: cleanTitle,
+              grams: 100,
+              calories: kcal,
+              proteinG: p,
+              carbsG: c,
+              fatG: f,
+              fiberG: fib,
+              source: 'ai' as const,
+            },
+          ];
+
+    const originLabel =
+      shareOriginBanner === 'share_intent'
+        ? 'Android Teilen · 0 € KI-Import'
+        : shareOriginBanner === 'deeplink'
+          ? 'Deep-Link · 0 € KI-Import'
+          : 'Zwischenablage · 0 € KI-Import';
+
+    const entry: MealEntry = {
+      id: `meal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      date: selectedDate,
+      timestamp: new Date().toISOString(),
+      category,
+      title: cleanTitle,
+      subtitle: `${p}g E · ${c}g KH · ${f}g F`,
+      items: parsedItems,
+      totalCalories: kcal,
+      proteinG: p,
+      carbsG: c,
+      fatG: f,
+      fiberG: fib,
+      analysisNote: originLabel,
+    };
+
+    haptics.success();
+    await addMealEntry(entry);
+    setRawAiInput('');
+    setShareOriginBanner(null);
+    onClose();
+  };
+
+  const handleLookupBarcode = async (codeToLookup?: string) => {
+    const code = (codeToLookup ?? barcodeInput).replace(/\D/g, '');
+    if (code.length < 8) {
+      setBarcodeError('Bitte mindestens 8 Ziffern (EAN-8 / EAN-13) eingeben.');
+      return;
+    }
+    setBarcodeLoading(true);
+    setBarcodeError(null);
+    const product = await lookupBarcodeOpenFoodFacts(code);
+    setBarcodeLoading(false);
+    if (!product) {
+      haptics.warning();
+      setBarcodeError('Kein Produkt in Open Food Facts gefunden. Probiere die Suche oder manuelle Eingabe.');
+      return;
+    }
+    haptics.success();
+    setScannedProduct(product);
+    setScannedGrams(product.defaultGrams);
+  };
+
+  const startCameraScanner = async () => {
+    setBarcodeError(null);
+    const BarcodeDetectorCtor = (window as unknown as {
+      BarcodeDetector?: new (opts: { formats: string[] }) => {
+        detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]>;
+      };
+    }).BarcodeDetector;
+
+    if (!navigator.mediaDevices?.getUserMedia || !BarcodeDetectorCtor) {
+      setBarcodeError(
+        'Kamera-Barcode-Erkennung wird in diesem Browser nicht unterstützt — EAN-Nummer einfach unten eingeben.'
       );
       return;
     }
 
-    setErrorText(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rec = new (SpeechRec as any)();
-    rec.lang = 'de-DE';
-    rec.interimResults = true;
-    rec.continuous = false;
-
-    rec.onresult = (event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => {
-      const text = Array.from(event.results)
-        .map((r) => r[0]?.transcript || '')
-        .join(' ')
-        .trim();
-      setDescription(text);
-    };
-    rec.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-    };
-    rec.onerror = () => {
-      setListening(false);
-      setErrorText('Mikrofon-Zugriff wurde abgelehnt oder unterbrochen.');
-    };
-
-    recognitionRef.current = rec;
-    setListening(true);
-    rec.start();
-  };
-
-  const handleBarcodeLookup = async (codeOverride?: string) => {
-    const code = (codeOverride ?? barcodeInput).trim();
-    if (!code) return;
-    setBarcodeBusy(true);
-    setErrorText(null);
-    const product = await lookupBarcodeOpenFoodFacts(code);
-    setBarcodeBusy(false);
-
-    if (!product) {
-      setErrorText(`Kein Produkt für Barcode „${code}“ in Open Food Facts gefunden.`);
-      return;
-    }
-    const newItem = foodResultToMealItem(product, product.defaultGrams);
-    setItems((prev) => [newItem, ...prev.filter((i) => !i.id.startsWith('demo_'))]);
-    if (product.imageUrl) setPreviewPhoto(product.imageUrl);
-    setStatusNote(`Open Food Facts · Barcode ${code}`);
-  };
-
-  const startLiveBarcodeCamera = async () => {
-    setErrorText(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorText('Kamera-API nicht verfügbar. Bitte Barcode direkt eingeben.');
-      return;
-    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
       });
       streamRef.current = stream;
+      // Mount <video> first; the effect below attaches srcObject and starts detection cleanly
       setCameraActive(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
-      const DetectorCtor = (window as unknown as Record<string, unknown>).BarcodeDetector;
-      if (!DetectorCtor) {
-        setErrorText(
-          'Kamera aktiv — Browser unterstützt keinen nativen BarcodeDetector. Bitte EAN unten eingeben.'
-        );
-        return;
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const detector = new (DetectorCtor as any)({ formats: ['ean_13', 'ean_8', 'upc_a'] });
-      const scanLoop = async () => {
-        if (!streamRef.current || !videoRef.current) return;
-        try {
-          const found = await detector.detect(videoRef.current);
-          if (found.length > 0 && found[0].rawValue) {
-            const code = String(found[0].rawValue);
-            setBarcodeInput(code);
-            stopCamera();
-            await handleBarcodeLookup(code);
-            return;
-          }
-        } catch {
-          // keep scanning
-        }
-        if (streamRef.current) requestAnimationFrame(scanLoop);
-      };
-      requestAnimationFrame(scanLoop);
     } catch {
-      setErrorText('Kamera-Zugriff nicht möglich — nutze die EAN-Eingabe oder Beispiel-Barcodes.');
+      stopCamera();
+      setBarcodeError('Kamerazugriff verweigert. Du kannst die EAN-Nummer direkt eingeben.');
     }
   };
 
-  const adjustItemGrams = (id: string, delta: number) => {
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-        const nextGrams = Math.max(10, item.grams + delta);
-        const factor = nextGrams / Math.max(1, item.grams);
-        return {
-          ...item,
-          grams: nextGrams,
-          calories: Math.round(item.calories * factor),
-          proteinG: Number((item.proteinG * factor).toFixed(1)),
-          carbsG: Number((item.carbsG * factor).toFixed(1)),
-          fatG: Number((item.fatG * factor).toFixed(1)),
-          fiberG: Number((item.fiberG * factor).toFixed(1)),
-        };
-      })
-    );
-  };
+  // Attach acquired MediaStream once <video> has mounted & run BarcodeDetector safely
+  useEffect(() => {
+    if (!cameraActive || !streamRef.current) return;
+    let cancelled = false;
+    let rafId = 0;
 
-  const addSearchResultToTray = (res: FoodSearchResult) => {
-    const item = foodResultToMealItem(res, res.defaultGrams);
-    setItems((prev) => [item, ...prev.filter((i) => !i.id.startsWith('demo_'))]);
-    setStatusNote(
-      res.source === 'openfoodfacts'
-        ? 'Aus Open Food Facts übernommen'
-        : 'Aus lokaler DACH/BLS-Datenbank übernommen'
-    );
-  };
+    const BarcodeDetectorCtor = (window as unknown as {
+      BarcodeDetector?: new (opts: { formats: string[] }) => {
+        detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]>;
+      };
+    }).BarcodeDetector;
 
-  const addRecentItemToTray = (recent: MealFoodItem) => {
-    const cloned: MealFoodItem = { ...recent, id: `recent_${Date.now()}` };
-    setItems((prev) => [cloned, ...prev.filter((i) => !i.id.startsWith('demo_'))]);
-    setStatusNote('Aus „Zuletzt gegessen“ übernommen');
-  };
+    const videoEl = videoRef.current;
+    if (!videoEl || !BarcodeDetectorCtor) return;
 
-  const handleAddQuickManual = () => {
-    const kcal = Math.max(1, Math.round(Number(manualKcal) || 0));
-    const name = manualName.trim() || 'Schnell-Eintrag';
-    if (!kcal) return;
-    const proteinG = Math.max(0, Number(manualProtein) || 0);
-    const remainingKcal = Math.max(0, kcal - proteinG * 4);
-    const carbsG = Math.round((remainingKcal * 0.55) / 4);
-    const fatG = Math.round((remainingKcal * 0.45) / 9);
-    const customItem: MealFoodItem = {
-      id: `manual_${Date.now()}`,
-      name,
-      grams: 100,
-      calories: kcal,
-      proteinG,
-      carbsG,
-      fatG,
-      fiberG: 2,
-      source: 'manual',
-    };
-    setItems((prev) => [customItem, ...prev.filter((i) => !i.id.startsWith('demo_'))]);
-    setManualName('');
-    setManualKcal('');
-    setManualProtein('');
-    setShowQuickManual(false);
-    setStatusNote('Manueller Schnell-Eintrag');
-  };
+    videoEl.srcObject = streamRef.current;
+    videoEl.play().catch(() => {});
 
-  const handleSaveMeal = async () => {
-    if (items.length === 0) return;
-    const entry = buildMealEntryFromItems({
-      date: selectedDate,
-      category,
-      items,
-      imageUrl: mode === 'ai' ? previewPhoto : undefined,
-      analysisNote: statusNote,
+    const detector = new BarcodeDetectorCtor({
+      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'],
     });
+
+    const scanLoop = async () => {
+      if (cancelled || !streamRef.current || !videoRef.current) return;
+      try {
+        if (videoRef.current.readyState >= 2) {
+          const codes = await detector.detect(videoRef.current);
+          if (!cancelled && codes.length > 0 && codes[0].rawValue) {
+            const rawCode = codes[0].rawValue;
+            stopCamera();
+            setBarcodeInput(rawCode);
+            await handleLookupBarcode(rawCode);
+            return;
+          }
+        }
+      } catch {
+        // continue scanning frames
+      }
+      if (!cancelled) {
+        rafId = window.requestAnimationFrame(scanLoop);
+      }
+    };
+
+    rafId = window.requestAnimationFrame(scanLoop);
+
+    return () => {
+      cancelled = true;
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [cameraActive]);
+
+  const handleSaveCatalogProduct = async (product: FoodCatalogProduct, grams: number) => {
+    const safeGrams = Math.max(5, Math.round(grams || product.defaultGrams));
+    const factor = safeGrams / 100;
+    const kcal = Math.round(product.kcalPer100g * factor);
+    const p = Math.round(product.proteinPer100g * factor);
+    const c = Math.round(product.carbsPer100g * factor);
+    const f = Math.round(product.fatPer100g * factor);
+    const fib = Math.round(product.fiberPer100g * factor);
+
+    const entry: MealEntry = {
+      id: `meal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      date: selectedDate,
+      timestamp: new Date().toISOString(),
+      category,
+      title: product.name,
+      subtitle: `${safeGrams} g${product.brand ? ` · ${product.brand}` : ''}`,
+      imageUrl: product.imageUrl,
+      items: [
+        {
+          id: `item_${Date.now()}`,
+          name: product.name,
+          brand: product.brand,
+          grams: safeGrams,
+          calories: kcal,
+          proteinG: p,
+          carbsG: c,
+          fatG: f,
+          fiberG: fib,
+          barcode: product.barcode,
+          imageUrl: product.imageUrl,
+          source: product.source,
+        },
+      ],
+      totalCalories: kcal,
+      proteinG: p,
+      carbsG: c,
+      fatG: f,
+      fiberG: fib,
+    };
+
+    haptics.success();
     await addMealEntry(entry);
-    triggerHaptic('success');
-    setItems(DEFAULT_DEMO_ITEMS);
-    setDescription('');
-    setUploadedPhotoDataUrl(null);
-    setPreviewPhoto(DEFAULT_PREVIEW_PHOTO);
-    setStatusNote('Analyse mit deinem eigenen API-Key');
     onClose();
   };
 
-  const hasKey = aiPrivacy.provider === 'ollama' || aiPrivacy.apiKey.trim().length > 6;
+  const manualAutoAtwater = useMemo(
+    () =>
+      computeAtwaterCalories(
+        Number(manualP) || 0,
+        Number(manualC) || 0,
+        Number(manualF) || 0
+      ),
+    [manualP, manualC, manualF]
+  );
+
+  const handleSaveManual = async () => {
+    const rawKcal = Math.max(0, Math.round(Number(manualKcal) || 0));
+    const p = Math.max(0, Math.round(Number(manualP) || 0));
+    const c = Math.max(0, Math.round(Number(manualC) || 0));
+    const f = Math.max(0, Math.round(Number(manualF) || 0));
+    const fib = Math.max(0, Math.round(Number(manualFiber) || 0));
+    const kcal = rawKcal > 0 ? rawKcal : computeAtwaterCalories(p, c, f);
+    const title = manualName.trim() || 'Eigene Mahlzeit';
+    if (kcal <= 0 && p <= 0 && c <= 0 && f <= 0) {
+      haptics.warning();
+      return;
+    }
+
+    if (editingMeal) {
+      const updated: MealEntry = {
+        ...editingMeal,
+        category,
+        title,
+        subtitle: `${p}g E · ${c}g KH · ${f}g F`,
+        totalCalories: kcal,
+        proteinG: p,
+        carbsG: c,
+        fatG: f,
+        fiberG: fib,
+      };
+      haptics.success();
+      await updateMealEntry(updated);
+      onClose();
+      return;
+    }
+
+    const entry: MealEntry = {
+      id: `meal_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      date: selectedDate,
+      timestamp: new Date().toISOString(),
+      category,
+      title,
+      subtitle: `${p}g E · ${c}g KH · ${f}g F`,
+      items: [
+        {
+          id: `manual_${Date.now()}`,
+          name: title,
+          grams: 100,
+          calories: kcal,
+          proteinG: p,
+          carbsG: c,
+          fatG: f,
+          fiberG: fib,
+          source: 'manual',
+        },
+      ],
+      totalCalories: kcal,
+      proteinG: p,
+      carbsG: c,
+      fatG: f,
+      fiberG: fib,
+    };
+
+    haptics.success();
+    await addMealEntry(entry);
+    setManualName('');
+    setManualKcal('');
+    setManualP('');
+    setManualC('');
+    setManualF('');
+    setManualFiber('');
+    onClose();
+  };
+
+  const aiCanSave =
+    (Number(draftCalories) > 0 ||
+      Number(draftProtein) > 0 ||
+      Number(draftCarbs) > 0 ||
+      Number(draftFat) > 0) &&
+    Boolean(parsedAiResult?.ok);
+
+  const tabs: { id: MealModalMode; label: string; icon: React.FC<{ className?: string }> }[] = [
+    { id: 'ai', label: 'KI-Import', icon: Sparkles },
+    { id: 'scan', label: t.nutrition.scan, icon: Barcode },
+    { id: 'search', label: t.nutrition.search, icon: Search },
+    { id: 'manual', label: 'Manuell', icon: Edit3 },
+  ];
+
+  const slotLabels = t.nutrition.slots;
 
   return (
-    <AnimatePresence>
-      {open && (
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      title={
+        editingMeal
+          ? 'Mahlzeit bearbeiten'
+          : mode === 'ai'
+            ? '0 € KI-Mahlzeiten-Import'
+            : t.nutrition.logMeal
+      }
+      subtitle={
+        editingMeal
+          ? 'Kalorien, Makros oder Tageszeit anpassen'
+          : mode === 'ai'
+            ? 'Teilen-Menü & Zwischenablage · 100 % lokal ohne API-Kosten'
+            : 'Open Food Facts, Barcode oder eigene Eingabe'
+      }
+      maxWidthClass="sm:max-w-xl"
+    >
+      <div className="space-y-4">
+        {/* Mode Switcher (hidden when editing an existing entry) */}
+        {!editingMeal && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Mahlzeit analysieren"
+          className="grid grid-cols-4 gap-1 rounded-2xl bg-[var(--bg-well)] p-1"
+          role="tablist"
+          aria-label="Erfassungsmodus"
         >
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-black/70 backdrop-blur-md"
-          />
-
-          <motion.div
-            initial={{ y: 44, opacity: 0, scale: 0.985 }}
-            animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: 44, opacity: 0, scale: 0.985 }}
-            transition={{ type: 'spring', stiffness: 370, damping: 33 }}
-            drag="y"
-            dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={{ top: 0, bottom: 0.4 }}
-            onDragEnd={(_, info) => {
-              if (info.offset.y > 95 || info.velocity.y > 500) {
-                triggerHaptic('tick');
-                onClose();
-              }
-            }}
-            className="relative z-10 w-full sm:max-w-[500px] max-h-[92dvh] overflow-y-auto rounded-t-[28px] sm:rounded-[28px] bg-[var(--bg-canvas)] border border-[var(--border-hairline)] text-[var(--text-primary)] p-5 pb-7 space-y-4 shadow-2xl"
-          >
-            <div className="sm:hidden flex justify-center -mt-2 pb-0.5 cursor-grab active:cursor-grabbing">
-              <div className="w-10 h-1 rounded-full bg-black/15 dark:bg-white/25" />
-            </div>
-            {/* Header matching IMG-20261121-WA0011 */}
-            <div className="relative text-center pt-1">
-              <h2 className="text-[22px] font-bold tracking-tight text-[var(--text-primary)]">
-                Mahlzeit erfassen
-              </h2>
-              <p className="mt-0.5 text-[13px] text-[var(--text-secondary)]">
-                Foto, Sprache, Barcode oder Open Food Facts
-              </p>
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const active = mode === tab.id;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                onClick={onClose}
-                aria-label="Schließen"
-                className="absolute right-0 top-0 w-9 h-9 rounded-full bg-[var(--bg-well)] flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                role="tab"
+                aria-selected={active}
+                onClick={() => {
+                  haptics.selection();
+                  setMode(tab.id);
+                }}
+                className={`relative min-h-[38px] rounded-[13px] flex items-center justify-center gap-1.5 text-[12px] font-medium transition-colors ${
+                  active
+                    ? 'text-[var(--bg-canvas)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
               >
-                <X className="w-4 h-4" />
+                {active && (
+                  <motion.span
+                    layoutId="mealModalModePill"
+                    transition={SNAPPY_SPRING}
+                    className="absolute inset-0 rounded-[13px] bg-[var(--text-primary)]"
+                  />
+                )}
+                <Icon className="w-3.5 h-3.5 relative z-10 shrink-0" />
+                <span className="relative z-10 truncate">{tab.label}</span>
               </button>
-            </div>
+            );
+          })}
+        </div>
+        )}
 
-            {/* 4-Mode Pill Switcher with sliding spring capsule */}
-            <div className="grid grid-cols-4 gap-1 p-1 rounded-full bg-[var(--bg-well)]">
-              {(
-                [
-                  { id: 'ai', label: 'KI Foto', icon: Camera },
-                  { id: 'voice', label: 'Sprache', icon: Mic },
-                  { id: 'barcode', label: 'Barcode', icon: ScanBarcode },
-                  { id: 'search', label: 'Suche', icon: Search },
-                ] as const
-              ).map((tab) => {
-                const Icon = tab.icon;
-                const active = mode === tab.id;
-                return (
-                  <motion.button
-                    key={tab.id}
+        {/* Meal Category Selector */}
+        <div className="grid grid-cols-4 gap-1.5">
+          {SLOTS.map((slot) => {
+            const active = category === slot;
+            return (
+              <button
+                key={slot}
+                type="button"
+                onClick={() => {
+                  haptics.tick();
+                  setCategory(slot);
+                }}
+                className={`min-h-[34px] rounded-xl text-[12px] font-medium border transition-colors ${
+                  active
+                    ? 'bg-[var(--bg-elevated)] border-white/20 text-[var(--text-primary)]'
+                    : 'bg-transparent border-[var(--border-hairline)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {slotLabels[slot]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ================================================================ */}
+        {/* TAB 1: ZERO-COST KI-IMPORT (ANDROID SHARE-INTENT & CLIPBOARD)    */}
+        {/* ================================================================ */}
+        {mode === 'ai' && (
+          <div className="space-y-4">
+            {/* Incoming Share-Intent / Deep-Link Origin Notice */}
+            {shareOriginBanner && (
+              <div className="rounded-2xl bg-[var(--accent-recovery)]/10 border border-[var(--accent-recovery)]/25 px-3.5 py-2.5 flex items-center gap-2.5 text-[12.5px] text-[var(--text-primary)]">
+                <Share2 className="w-4 h-4 text-[var(--accent-recovery)] shrink-0" />
+                <span>
+                  {shareOriginBanner === 'share_intent'
+                    ? 'Direkt über Android „Teilen“ empfangen — kurz prüfen und übernehmen.'
+                    : shareOriginBanner === 'deeplink'
+                      ? 'Per Deep-Link empfangen — Werte wurden automatisch eingetragen.'
+                      : 'Aus der Zwischenablage eingefügt und lokal ausgewertet.'}
+                </span>
+              </div>
+            )}
+
+            {/* Step 1: 1-Tap Prompt Copy Card (compact when already receiving a shared payload) */}
+            {!(shareOriginBanner && parsedAiResult?.ok) && (
+              <div className="rounded-2xl bg-[var(--bg-well)]/80 border border-[var(--border-hairline)] p-3.5 space-y-2.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-[var(--text-primary)]">
+                      1. In Gemini, ChatGPT oder Claude schätzen lassen
+                    </p>
+                    <p className="mt-0.5 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+                      Kopiere den Kurz-Prompt, sende Foto oder Text an deine KI-App und teile die
+                      Antwort direkt mit KADENZ oder kopiere sie hierher.
+                    </p>
+                  </div>
+                  <button
                     type="button"
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => {
-                      triggerHaptic('selection');
-                      setMode(tab.id);
-                      if (tab.id !== 'barcode') stopCamera();
-                    }}
-                    className={`relative min-h-[36px] rounded-full flex items-center justify-center gap-1.5 text-[11.5px] font-medium transition-colors ${
-                      active
-                        ? 'text-[var(--text-primary)]'
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
+                    onClick={handleCopyPrompt}
+                    className="shrink-0 whitespace-nowrap min-h-[36px] px-3 rounded-xl bg-[var(--text-primary)] text-[var(--bg-canvas)] text-[12px] font-semibold inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity"
                   >
-                    {active && (
-                      <motion.span
-                        layoutId="mealModalModePill"
-                        transition={{ type: 'spring', stiffness: 500, damping: 34 }}
-                        className="absolute inset-0 rounded-full bg-[var(--bg-surface)] shadow-sm"
-                      />
-                    )}
-                    <Icon className="relative z-10 w-3.5 h-3.5" />
-                    <span className="relative z-10">{tab.label}</span>
-                  </motion.button>
-                );
-              })}
-            </div>
-
-            {/* MODE 1: KI Foto & Beschreibung */}
-            {mode === 'ai' && (
-              <div className="space-y-3">
-                <div className="relative rounded-[20px] overflow-hidden border border-[var(--border-hairline)] bg-[var(--bg-surface)] aspect-[16/10]">
-                  <img
-                    src={previewPhoto}
-                    alt="Mahlzeit Vorschau"
-                    referrerPolicy="no-referrer"
-                    className={`w-full h-full object-cover transition-all duration-300 ${
-                      analyzing ? 'scale-[1.03] brightness-75' : 'scale-100 brightness-100'
-                    }`}
-                  />
-                  <span className="pointer-events-none absolute top-3.5 left-3.5 w-6 h-6 border-t-[2.5px] border-l-[2.5px] border-white/90 rounded-tl-lg" />
-                  <span className="pointer-events-none absolute top-3.5 right-3.5 w-6 h-6 border-t-[2.5px] border-r-[2.5px] border-white/90 rounded-tr-lg" />
-                  <span className="pointer-events-none absolute bottom-3.5 left-3.5 w-6 h-6 border-b-[2.5px] border-l-[2.5px] border-white/90 rounded-bl-lg" />
-                  <span className="pointer-events-none absolute bottom-3.5 right-3.5 w-6 h-6 border-b-[2.5px] border-r-[2.5px] border-white/90 rounded-br-lg" />
-
-                  {/* Live Animated AI Scan Beam Overlay */}
-                  <AnimatePresence>
-                    {analyzing && (
-                      <motion.div
-                        key="ai-scan-overlay"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="pointer-events-none absolute inset-0"
-                      >
-                        <motion.div
-                          initial={{ y: '-10%' }}
-                          animate={{ y: ['0%', '92%', '0%'] }}
-                          transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
-                          className="absolute inset-x-3 h-[2px] rounded-full bg-[#F5B82E] shadow-[0_0_18px_4px_rgba(245,184,46,0.75)]"
-                        />
-                        {analysisProgress && (
-                          <div className="absolute top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-black/75 backdrop-blur-md border border-white/15 px-3.5 py-1 flex items-center gap-2 text-[11.5px] font-medium text-white whitespace-nowrap">
-                            <Loader2 className="w-3.5 h-3.5 text-[#F5B82E] animate-spin shrink-0" />
-                            <span>{analysisProgress.percent} %</span>
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {!analyzing && (
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap inline-flex items-center gap-1.5 rounded-full bg-black/65 backdrop-blur-md border border-white/15 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-black/80 transition-colors"
-                    >
-                      <Upload className="w-3.5 h-3.5 shrink-0" />
-                      Foto wählen / aufnehmen
-                    </button>
-                  )}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={handlePhotoSelect}
-                    className="hidden"
-                  />
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Optional beschreiben: z. B. 80g Haferflocken, 150g Skyr"
-                    className="flex-1 min-h-[42px] rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-hairline)] px-3.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--text-secondary)]"
-                  />
-                  <motion.button
-                    type="button"
-                    whileTap={{ scale: 0.96 }}
-                    disabled={analyzing}
-                    onClick={() => runAIAnalysis()}
-                    className="min-h-[42px] px-4 rounded-2xl bg-[#F5B82E] text-[#111215] text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 hover:brightness-105 disabled:opacity-60"
-                  >
-                    {analyzing ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                    {promptCopied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Kopiert</span>
+                      </>
                     ) : (
-                      <ScanLine className="w-3.5 h-3.5" />
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Prompt</span>
+                      </>
                     )}
-                    Analysieren
-                  </motion.button>
+                  </button>
                 </div>
               </div>
             )}
 
-            {/* MODE 2: Spracheingabe */}
-            {mode === 'voice' && (
-              <div className="rounded-[20px] bg-[var(--bg-surface)] border border-[var(--border-hairline)] p-4 space-y-3 text-center">
+            {/* Parser Status & Live Editable Review (shown prominently when valid) */}
+            {parsedAiResult && !parsedAiResult.ok && (
+              <div
+                role="alert"
+                className="rounded-2xl bg-[var(--accent-strain)]/10 border border-[var(--accent-strain)]/25 p-3.5 flex items-start gap-2.5 text-[12.5px] text-[var(--text-primary)]"
+              >
+                <AlertTriangle className="w-4 h-4 text-[var(--accent-strain)] shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium">Eingabe nicht erkannt</p>
+                  <p className="mt-0.5 text-[var(--text-secondary)]">{parsedAiResult.message}</p>
+                </div>
+              </div>
+            )}
+
+            {parsedAiResult && parsedAiResult.ok && (
+              <div className="rounded-2xl bg-[var(--bg-elevated)]/70 border border-[var(--border-hairline)] p-4 space-y-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--accent-recovery)]">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>
+                      {parsedAiResult.data.sourceFormat === 'json'
+                        ? 'JSON lokal erkannt'
+                        : parsedAiResult.data.sourceFormat === 'deeplink'
+                          ? 'Deep-Link erkannt'
+                          : 'Nährwerte aus Text erkannt'}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-[var(--text-muted)]">
+                    Direkt bearbeitbar
+                  </span>
+                </div>
+
+                {parsedAiResult.data.warnings.length > 0 && (
+                  <div className="rounded-xl bg-[var(--accent-calories)]/10 border border-[var(--accent-calories)]/25 px-3 py-2 text-[11.5px] text-[var(--text-secondary)] space-y-1">
+                    {parsedAiResult.data.warnings.map((w, idx) => (
+                      <p key={idx}>{w}</p>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-2.5">
+                  <div>
+                    <label
+                      htmlFor="ai-draft-name"
+                      className="block text-[11.5px] text-[var(--text-secondary)] mb-1"
+                    >
+                      Mahlzeit
+                    </label>
+                    <input
+                      id="ai-draft-name"
+                      type="text"
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-[14px] font-medium text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <div>
+                      <label
+                        htmlFor="ai-draft-kcal"
+                        className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                      >
+                        Kalorien
+                      </label>
+                      <input
+                        id="ai-draft-kcal"
+                        type="number"
+                        min={0}
+                        max={8000}
+                        value={draftCalories}
+                        onChange={(e) => setDraftCalories(e.target.value)}
+                        className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-2.5 text-[14px] font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="ai-draft-protein"
+                        className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                      >
+                        Eiweiß (g)
+                      </label>
+                      <input
+                        id="ai-draft-protein"
+                        type="number"
+                        min={0}
+                        max={600}
+                        value={draftProtein}
+                        onChange={(e) => setDraftProtein(e.target.value)}
+                        className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-2.5 text-[14px] font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="ai-draft-carbs"
+                        className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                      >
+                        KH (g)
+                      </label>
+                      <input
+                        id="ai-draft-carbs"
+                        type="number"
+                        min={0}
+                        max={600}
+                        value={draftCarbs}
+                        onChange={(e) => setDraftCarbs(e.target.value)}
+                        className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-2.5 text-[14px] font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="ai-draft-fat"
+                        className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                      >
+                        Fett (g)
+                      </label>
+                      <input
+                        id="ai-draft-fat"
+                        type="number"
+                        min={0}
+                        max={600}
+                        value={draftFat}
+                        onChange={(e) => setDraftFat(e.target.value)}
+                        className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-2.5 text-[14px] font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                      />
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <label
+                        htmlFor="ai-draft-fiber"
+                        className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                      >
+                        Ballastst. (g)
+                      </label>
+                      <input
+                        id="ai-draft-fiber"
+                        type="number"
+                        min={0}
+                        max={150}
+                        value={draftFiber}
+                        onChange={(e) => setDraftFiber(e.target.value)}
+                        className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-2.5 text-[14px] font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={!aiCanSave}
+              onClick={handleSaveParsedAiMeal}
+              className="w-full min-h-[48px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-[14.5px] font-semibold disabled:opacity-35 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+            >
+              Mahlzeit übernehmen
+            </button>
+
+            {/* Step 2: Paste from Clipboard + Raw Input Textarea */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="kadenz-ai-import-input"
+                  className="text-[12px] font-medium text-[var(--text-secondary)] truncate"
+                >
+                  {shareOriginBanner && parsedAiResult?.ok
+                    ? 'Empfangener Rohtext (bearbeitbar)'
+                    : '2. KI-Antwort einfügen (JSON, Text oder Link)'}
+                </label>
                 <button
                   type="button"
-                  onClick={toggleVoiceInput}
-                  aria-label={listening ? 'Aufnahme stoppen' : 'Spracheingabe starten'}
-                  className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center transition-all ${
-                    listening
-                      ? 'bg-[#FB7B6B] text-white shadow-[0_0_0_10px_rgba(251,123,107,0.2)]'
-                      : 'bg-[var(--accent-sleep)]/20 text-[var(--accent-sleep)] hover:bg-[var(--accent-sleep)]/30'
-                  }`}
+                  onClick={handlePasteFromClipboard}
+                  className="shrink-0 whitespace-nowrap min-h-[34px] px-3 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-hairline)] text-[12px] font-medium text-[var(--text-primary)] inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
                 >
-                  {listening ? <MicOff className="w-7 h-7" /> : <Mic className="w-7 h-7" />}
+                  <ClipboardPaste className="w-3.5 h-3.5 text-[var(--accent-calories)] shrink-0" />
+                  <span>Zwischenablage</span>
                 </button>
-                <p className="text-xs text-[var(--text-secondary)]">
-                  {listening
-                    ? 'Ich höre zu (Deutsch) — sprich deine Mahlzeit ein…'
-                    : 'Tippen und sprechen, z. B. „200g Hähnchenbrust, 200g Reis und Avocado“'}
-                </p>
-                <textarea
-                  rows={2}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Gesprochener oder getippter Text erscheint hier…"
-                  className="w-full rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] p-3 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
+              </div>
+
+              <textarea
+                ref={aiTextareaRef}
+                id="kadenz-ai-import-input"
+                rows={shareOriginBanner && parsedAiResult?.ok ? 2 : 4}
+                value={rawAiInput}
+                onChange={(e) => {
+                  setRawAiInput(e.target.value);
+                  setClipboardFeedback(null);
+                }}
+                placeholder={`{\n  "meal": "Hähnchenbrust mit Reis",\n  "calories": 540,\n  "protein_g": 55,\n  "carbs_g": 60,\n  "fat_g": 8\n}`}
+                className="w-full rounded-2xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3.5 py-2.5 text-[12.5px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-muted)]/70 focus:outline-none focus:border-white/25 resize-y"
+              />
+
+              {clipboardFeedback && (
+                <p className="text-[12px] text-[var(--accent-calories)]">{clipboardFeedback}</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================ */}
+        {/* TAB 2: FREE BARCODE SCANNER (OPEN FOOD FACTS)                    */}
+        {/* ================================================================ */}
+        {mode === 'scan' && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-[var(--bg-well)] border border-[var(--border-hairline)] p-4 space-y-3">
+              {cameraActive ? (
+                <div className="relative overflow-hidden rounded-xl bg-black aspect-video">
+                  <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+                  <button
+                    type="button"
+                    onClick={stopCamera}
+                    className="absolute top-2.5 right-2.5 px-3 py-1.5 rounded-full bg-black/70 text-white text-xs font-medium inline-flex items-center gap-1.5"
+                  >
+                    <CameraOff className="w-3.5 h-3.5" />
+                    <span>Kamera stoppen</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startCameraScanner}
+                  className="w-full min-h-[44px] rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-hairline)] text-[13px] font-medium text-[var(--text-primary)] inline-flex items-center justify-center gap-2 hover:border-white/20"
+                >
+                  <Camera className="w-4 h-4 text-[var(--accent-calories)]" />
+                  <span>Kamera-Barcode-Scanner starten</span>
+                </button>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleLookupBarcode();
+                  }}
+                  placeholder="EAN-Nummer eingeben (z. B. 4000417025005)"
+                  className="flex-1 min-h-[44px] rounded-xl bg-[var(--bg-surface)] border border-[var(--border-hairline)] px-3.5 text-sm tabular-nums text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-white/25"
                 />
                 <button
                   type="button"
-                  disabled={analyzing || !description.trim()}
-                  onClick={() => runAIAnalysis()}
-                  className="w-full min-h-[40px] rounded-full bg-[var(--accent-sleep)] text-[#090A0C] text-xs font-semibold disabled:opacity-50"
+                  disabled={barcodeLoading}
+                  onClick={() => handleLookupBarcode()}
+                  className="min-h-[44px] px-4 rounded-xl bg-[var(--text-primary)] text-[var(--bg-canvas)] text-sm font-semibold inline-flex items-center gap-1.5"
                 >
-                  {analyzing ? 'Analysiere…' : 'Gesprochene Mahlzeit berechnen'}
+                  {barcodeLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Prüfen'}
                 </button>
               </div>
+
+              {barcodeError && (
+                <p className="text-[12px] text-[var(--accent-strain)]">{barcodeError}</p>
+              )}
+            </div>
+
+            {scannedProduct && (
+              <ProductGramCard
+                product={scannedProduct}
+                grams={scannedGrams}
+                onChangeGrams={setScannedGrams}
+                onSave={() => handleSaveCatalogProduct(scannedProduct, scannedGrams)}
+              />
             )}
+          </div>
+        )}
 
-            {/* MODE 3: Barcode Scanner + Open Food Facts v2 */}
-            {mode === 'barcode' && (
-              <div className="rounded-[20px] bg-[var(--bg-surface)] border border-[var(--border-hairline)] p-4 space-y-3">
-                {cameraActive ? (
-                  <div className="relative rounded-2xl overflow-hidden aspect-[16/9] bg-black">
-                    <video ref={videoRef} playsInline muted className="w-full h-full object-cover" />
-                    <button
-                      type="button"
-                      onClick={stopCamera}
-                      className="absolute top-2.5 right-2.5 rounded-full bg-black/70 px-3 py-1 text-xs text-white"
-                    >
-                      Kamera stoppen
-                    </button>
-                  </div>
+        {/* ================================================================ */}
+        {/* TAB 3: FREE OPEN FOOD FACTS & LOCAL CATALOG SEARCH               */}
+        {/* ================================================================ */}
+        {mode === 'search' && (
+          <div className="space-y-3.5">
+            <div className="relative flex items-center">
+              <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-3.5 pointer-events-none" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setSelectedFood(null);
+                }}
+                placeholder="Lebensmittel suchen (Open Food Facts + Offline-Basis)…"
+                className="w-full min-h-[44px] rounded-2xl bg-[var(--bg-well)] border border-[var(--border-hairline)] pl-10 pr-10 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-white/25"
+              />
+              {searchLoading && (
+                <Loader2 className="w-4 h-4 animate-spin text-[var(--text-muted)] absolute right-3.5" />
+              )}
+            </div>
+
+            {selectedFood ? (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedFood(null)}
+                  className="text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  ← Zurück zur Ergebnisliste
+                </button>
+                <ProductGramCard
+                  product={selectedFood}
+                  grams={selectedFoodGrams}
+                  onChangeGrams={setSelectedFoodGrams}
+                  onSave={() => handleSaveCatalogProduct(selectedFood, selectedFoodGrams)}
+                />
+              </div>
+            ) : (
+              <div className="max-h-[300px] overflow-y-auto divide-y divide-[var(--border-hairline)] rounded-2xl bg-[var(--bg-well)]/60 border border-[var(--border-hairline)]">
+                {searchResults.length === 0 ? (
+                  <p className="p-4 text-center text-xs text-[var(--text-muted)]">
+                    Keine Treffer gefunden.
+                  </p>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={startLiveBarcodeCamera}
-                    className="w-full min-h-[42px] rounded-2xl bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] text-xs font-medium text-[var(--text-primary)] inline-flex items-center justify-center gap-2"
-                  >
-                    <ScanBarcode className="w-4 h-4 text-[var(--accent-calories)]" />
-                    Live-Barcode-Kamera starten
-                  </button>
-                )}
-
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    placeholder="EAN-Barcode eingeben (z. B. 4000417025005)"
-                    className="flex-1 min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
-                  />
-                  <button
-                    type="button"
-                    disabled={barcodeBusy}
-                    onClick={() => handleBarcodeLookup()}
-                    className="min-h-[40px] px-4 rounded-xl bg-[#F5B82E] text-[#111215] text-xs font-semibold shrink-0"
-                  >
-                    {barcodeBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Suchen'}
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap gap-1.5">
-                  {[
-                    { code: '4000417025005', label: 'Kölln Haferflocken' },
-                    { code: '4311501645512', label: 'Skyr Natur' },
-                    { code: '4008400404127', label: 'Protein Pudding' },
-                  ].map((s) => (
+                  searchResults.map((item) => (
                     <button
-                      key={s.code}
+                      key={item.id}
                       type="button"
                       onClick={() => {
-                        setBarcodeInput(s.code);
-                        handleBarcodeLookup(s.code);
+                        haptics.tick();
+                        setSelectedFood(item);
+                        setSelectedFoodGrams(item.defaultGrams);
                       }}
-                      className="rounded-full bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                      className="w-full px-3.5 py-3 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03] transition-colors"
                     >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* MODE 4: Manuelle Suche (Open Food Facts + Offline BLS + Zuletzt + Schnell-Kalorien) */}
-            {mode === 'search' && (
-              <div className="rounded-[20px] bg-[var(--bg-surface)] border border-[var(--border-hairline)] p-4 space-y-3">
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Lebensmittel suchen (Open Food Facts + BLS)…"
-                      className="w-full min-h-[40px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] pl-10 pr-3 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowQuickManual((s) => !s)}
-                    className="shrink-0 min-h-[40px] px-3 rounded-xl bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] text-[11.5px] font-medium text-[var(--text-primary)]"
-                  >
-                    {showQuickManual ? 'Zurück' : '+ Frei'}
-                  </button>
-                </div>
-
-                {showQuickManual ? (
-                  <div className="space-y-2.5 pt-1">
-                    <input
-                      type="text"
-                      value={manualName}
-                      onChange={(e) => setManualName(e.target.value)}
-                      placeholder="Name (z. B. Proteinriegel)"
-                      className="w-full min-h-[38px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-xs text-[var(--text-primary)]"
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        value={manualKcal}
-                        onChange={(e) => setManualKcal(e.target.value)}
-                        placeholder="Kalorien (kcal)"
-                        className="min-h-[38px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-xs text-[var(--text-primary)]"
-                      />
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        value={manualProtein}
-                        onChange={(e) => setManualProtein(e.target.value)}
-                        placeholder="Protein (g, optional)"
-                        className="min-h-[38px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-xs text-[var(--text-primary)]"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      disabled={!manualKcal}
-                      onClick={handleAddQuickManual}
-                      className="w-full min-h-[38px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-xs font-semibold disabled:opacity-40"
-                    >
-                      Zur Mahlzeit hinzufügen
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    {/* 1-Tap Zuletzt gegessen chips */}
-                    {recentQuickItems.length > 0 && !searchQuery.trim() && (
-                      <div className="space-y-1.5">
-                        <p className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--text-muted)]">
-                          <Clock className="w-3 h-3" />
-                          Zuletzt gegessen
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {recentQuickItems.map((ri) => (
-                            <button
-                              key={ri.id}
-                              type="button"
-                              onClick={() => addRecentItemToTray(ri)}
-                              className="rounded-full bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] px-2.5 py-1 text-[11px] text-[var(--text-primary)] inline-flex items-center gap-1"
-                            >
-                              <Plus className="w-3 h-3 text-[var(--accent-calories)]" />
-                              <span>{ri.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="max-h-40 overflow-y-auto divide-y divide-[var(--border-hairline)]">
-                      {searching && (
-                        <div className="py-3 text-center text-xs text-[var(--text-secondary)] inline-flex items-center gap-2 w-full justify-center">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Suche in Open Food Facts…
-                        </div>
-                      )}
-                      {searchResults.slice(0, 8).map((res) => (
-                        <div
-                          key={res.id}
-                          className="py-2 flex items-center justify-between gap-2 text-xs"
-                        >
-                          <div className="min-w-0">
-                            <p className="font-medium text-[var(--text-primary)] truncate">
-                              {res.name}
-                            </p>
-                            <p className="text-[11px] text-[var(--text-muted)] truncate">
-                              {res.brand || 'BLS'} · {res.kcalPer100g} kcal/100g · P{' '}
-                              {res.proteinPer100g}g
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => addSearchResultToTray(res)}
-                            className="shrink-0 min-h-[30px] px-2.5 rounded-full bg-[var(--bg-well)] hover:bg-[var(--bg-elevated)] text-[var(--text-primary)] inline-flex items-center gap-1"
-                          >
-                            <Plus className="w-3 h-3" />
-                            {res.defaultGrams}g
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-[11px] text-[var(--text-muted)]">
-                      {remoteUsed
-                        ? 'Live-Ergebnisse aus Open Food Facts + lokaler DACH-Datenbank.'
-                        : 'Sofortsuche aus lokaler BLS/DACH-Datenbank (Open Food Facts ab 2 Zeichen).'}
-                    </p>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Live AI Analysis Progress Bar (0 % -> 100 % with live API streaming feedback) */}
-            <AnimatePresence>
-              {analysisProgress && (
-                <motion.div
-                  key="ai-progress-card"
-                  initial={{ opacity: 0, y: -6, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -6, scale: 0.98 }}
-                  transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                  role="progressbar"
-                  aria-valuenow={analysisProgress.percent}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="KI-Analyse Fortschritt"
-                  className="rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-hairline)] p-3.5 space-y-2.5"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-[12.5px] font-semibold text-[var(--text-primary)] truncate">
-                        {analysisProgress.label}
-                      </p>
-                      {analysisProgress.detail && (
-                        <p className="text-[11px] text-[var(--text-muted)] truncate">
-                          {analysisProgress.detail}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-[13px] font-bold tabular-nums text-[var(--accent-calories)]">
-                        {analysisProgress.percent} %
-                      </span>
-                      {analyzing && (
-                        <button
-                          type="button"
-                          onClick={cancelAIAnalysis}
-                          className="text-[11px] font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-0.5 rounded-full bg-[var(--bg-well)]"
-                        >
-                          Stopp
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="h-[6px] w-full rounded-full bg-[var(--bg-well)] overflow-hidden">
-                    <motion.div
-                      initial={{ width: '6%' }}
-                      animate={{ width: `${analysisProgress.percent}%` }}
-                      transition={{ type: 'spring', stiffness: 140, damping: 24 }}
-                      className="h-full rounded-full"
-                      style={{
-                        background:
-                          analysisProgress.stage === 'done'
-                            ? 'var(--accent-recovery)'
-                            : 'linear-gradient(90deg, #F5B82E 0%, #5CE17C 100%)',
-                      }}
-                    />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {errorText && (
-              <div className="rounded-2xl bg-[var(--accent-strain)]/12 border border-[var(--accent-strain)]/30 px-3.5 py-2.5 text-xs text-[var(--accent-strain)]">
-                {errorText}
-              </div>
-            )}
-
-            {/* KI-Schätzung / Zusammenfassung Card */}
-            <div className="rounded-[22px] bg-[var(--bg-surface)] border border-[var(--border-hairline)] p-4 space-y-3">
-              <div className="space-y-2.5">
-                <div>
-                  <h3 className="text-[16px] font-semibold text-[var(--text-primary)]">
-                    {mode === 'ai' ? 'KI-Schätzung' : 'Deine Mahlzeit'}
-                  </h3>
-                  <p className="text-[12px] text-[var(--text-secondary)]">
-                    Erkannte Lebensmittel und Mengen
-                  </p>
-                </div>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {CATEGORY_OPTIONS.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setCategory(c.id)}
-                      className={`min-h-[30px] px-2 rounded-full text-[11px] font-medium whitespace-nowrap transition-colors ${
-                        category === c.id
-                          ? 'bg-[var(--text-primary)] text-[var(--bg-canvas)] font-semibold'
-                          : 'bg-[var(--bg-well)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                      }`}
-                    >
-                      {c.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="divide-y divide-[var(--border-hairline)]">
-                {items.map((item) => (
-                  <div key={item.id} className="py-2.5 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-10 h-10 rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] flex items-center justify-center shrink-0 overflow-hidden">
-                        {item.imageUrl ? (
-                          <img
-                            src={item.imageUrl}
-                            alt={item.name}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <Utensils className="w-4 h-4 text-[var(--accent-calories)]" />
-                        )}
-                      </span>
                       <div className="min-w-0">
-                        <p className="text-[14.5px] font-medium text-[var(--text-primary)] truncate">
+                        <p className="text-[14px] font-medium text-[var(--text-primary)] truncate">
                           {item.name}
                         </p>
-                        {editingItems && (
-                          <div className="mt-1 flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => adjustItemGrams(item.id, -20)}
-                              aria-label="Menge verringern"
-                              className="w-6 h-6 rounded-full bg-[var(--bg-well)] flex items-center justify-center text-[var(--text-primary)]"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => adjustItemGrams(item.id, 20)}
-                              aria-label="Menge erhöhen"
-                              className="w-6 h-6 rounded-full bg-[var(--bg-well)] flex items-center justify-center text-[var(--text-primary)]"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setItems((p) => p.filter((x) => x.id !== item.id))}
-                              aria-label="Entfernen"
-                              className="w-6 h-6 rounded-full bg-[var(--accent-strain)]/20 text-[var(--accent-strain)] flex items-center justify-center ml-1"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        )}
+                        <p className="text-[11.5px] text-[var(--text-secondary)] tabular-nums">
+                          {item.brand ? `${item.brand} · ` : ''}
+                          {item.proteinPer100g}g E · {item.carbsPer100g}g KH · {item.fatPer100g}g F
+                          {' / 100g'}
+                        </p>
                       </div>
-                    </div>
-
-                    <div className="text-right shrink-0 tabular-nums">
-                      <p className="text-[14px] font-medium text-[var(--text-primary)]">
-                        {item.grams} g
-                      </p>
-                      <p className="text-[12px] text-[var(--text-secondary)]">
-                        {item.calories} kcal
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Gesamt Row with editorial serif total */}
-              <div className="pt-2 border-t border-[var(--border-hairline)] flex items-baseline justify-between">
-                <div>
-                  <span className="text-[15px] text-[var(--text-secondary)]">Gesamt</span>
-                  <p className="text-[11px] text-[var(--text-muted)] tabular-nums">
-                    P {totals.protein}g · K {totals.carbs}g · F {totals.fat}g
-                  </p>
-                </div>
-                <div className="flex items-baseline gap-1.5">
-                  <AnimatedNumber
-                    value={totals.kcal}
-                    className="serif-metric text-[40px] font-medium leading-none text-[var(--text-primary)]"
-                  />
-                  <span className="text-[15px] text-[var(--text-secondary)]">kcal</span>
-                </div>
-              </div>
-
-              {/* API-Key attribution footer */}
-              <div className="pt-2 border-t border-[var(--border-hairline)] flex items-center justify-between gap-2 text-[11.5px] text-[var(--text-secondary)]">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Cpu className="w-3.5 h-3.5 shrink-0 text-[var(--text-muted)]" />
-                  <span className="truncate">
-                    {hasKey
-                      ? `${AI_PROVIDER_LABELS[aiPrivacy.provider]} · Eigener API-Key`
-                      : statusNote}
-                  </span>
-                </div>
-                {!hasKey && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      setActiveTab('more');
-                      setDetailView('aiPrivacy');
-                    }}
-                    className="shrink-0 text-[var(--accent-recovery)] font-medium hover:underline"
-                  >
-                    Key einrichten
-                  </button>
+                      <span className="shrink-0 text-[13px] font-semibold tabular-nums text-[var(--text-primary)]">
+                        {item.kcalPer100g} kcal
+                      </span>
+                    </button>
+                  ))
                 )}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ================================================================ */}
+        {/* TAB 4: QUICK MANUAL ENTRY                                        */}
+        {/* ================================================================ */}
+        {mode === 'manual' && (
+          <div className="space-y-3.5">
+            <div>
+              <label
+                htmlFor="manual-meal-name"
+                className="block text-[12px] text-[var(--text-secondary)] mb-1"
+              >
+                Bezeichnung
+              </label>
+              <input
+                id="manual-meal-name"
+                type="text"
+                value={manualName}
+                onChange={(e) => setManualName(e.target.value)}
+                placeholder="z. B. Skyr mit Beeren & Haferflocken"
+                className="w-full min-h-[44px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3.5 text-sm text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+              />
             </div>
 
-            {/* Primary CTA ("Übernehmen") + "Bearbeiten" */}
-            <div className="space-y-2.5 pt-1">
-              <button
-                type="button"
-                disabled={items.length === 0}
-                onClick={handleSaveMeal}
-                className="w-full min-h-[50px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-[15px] font-semibold hover:opacity-92 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
-              >
-                <Check className="w-4 h-4" />
-                Übernehmen
-              </button>
-              <button
-                type="button"
-                onClick={() => setEditingItems((e) => !e)}
-                className="w-full py-1.5 text-center text-[13.5px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-              >
-                {editingItems ? 'Fertig bearbeiten' : 'Bearbeiten'}
-              </button>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              <div>
+                <label
+                  htmlFor="manual-meal-kcal"
+                  className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                >
+                  Kalorien {manualAutoAtwater > 0 && !manualKcal ? '(auto)' : '*'}
+                </label>
+                <input
+                  id="manual-meal-kcal"
+                  type="number"
+                  min={0}
+                  max={8000}
+                  value={manualKcal}
+                  onChange={(e) => setManualKcal(e.target.value)}
+                  placeholder={manualAutoAtwater > 0 ? `≈ ${manualAutoAtwater}` : '480'}
+                  className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="manual-meal-p"
+                  className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                >
+                  Eiweiß (g)
+                </label>
+                <input
+                  id="manual-meal-p"
+                  type="number"
+                  min={0}
+                  max={600}
+                  value={manualP}
+                  onChange={(e) => setManualP(e.target.value)}
+                  placeholder="35"
+                  className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="manual-meal-c"
+                  className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                >
+                  KH (g)
+                </label>
+                <input
+                  id="manual-meal-c"
+                  type="number"
+                  min={0}
+                  max={600}
+                  value={manualC}
+                  onChange={(e) => setManualC(e.target.value)}
+                  placeholder="52"
+                  className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="manual-meal-f"
+                  className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                >
+                  Fett (g)
+                </label>
+                <input
+                  id="manual-meal-f"
+                  type="number"
+                  min={0}
+                  max={600}
+                  value={manualF}
+                  onChange={(e) => setManualF(e.target.value)}
+                  placeholder="12"
+                  className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                />
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label
+                  htmlFor="manual-meal-fib"
+                  className="block text-[11px] text-[var(--text-secondary)] mb-1"
+                >
+                  Ballastst. (g)
+                </label>
+                <input
+                  id="manual-meal-fib"
+                  type="number"
+                  min={0}
+                  max={150}
+                  value={manualFiber}
+                  onChange={(e) => setManualFiber(e.target.value)}
+                  placeholder="6"
+                  className="w-full min-h-[42px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+                />
+              </div>
             </div>
-          </motion.div>
+
+            <button
+              type="button"
+              disabled={!(Number(manualKcal) > 0 || Number(manualP) > 0 || Number(manualC) > 0 || Number(manualF) > 0)}
+              onClick={handleSaveManual}
+              className="w-full min-h-[48px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-[14.5px] font-semibold disabled:opacity-35 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
+            >
+              {editingMeal ? 'Änderungen speichern' : 'Mahlzeit speichern'}
+            </button>
+          </div>
+        )}
+      </div>
+    </BottomSheet>
+  );
+};
+
+const ProductGramCard: React.FC<{
+  product: FoodCatalogProduct;
+  grams: number;
+  onChangeGrams: (g: number) => void;
+  onSave: () => void;
+}> = ({ product, grams, onChangeGrams, onSave }) => {
+  const safeGrams = Math.max(5, grams || 100);
+  const factor = safeGrams / 100;
+  const kcal = Math.round(product.kcalPer100g * factor);
+  const p = Math.round(product.proteinPer100g * factor);
+  const c = Math.round(product.carbsPer100g * factor);
+  const f = Math.round(product.fatPer100g * factor);
+
+  return (
+    <div className="rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-hairline)] p-4 space-y-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[15px] font-semibold text-[var(--text-primary)] truncate">
+            {product.name}
+          </p>
+          {product.brand && (
+            <p className="text-[12px] text-[var(--text-secondary)]">{product.brand}</p>
+          )}
         </div>
-      )}
-    </AnimatePresence>
+        <div className="text-right shrink-0">
+          <p className="serif-metric text-[26px] leading-none text-[var(--text-primary)]">
+            {kcal}
+          </p>
+          <p className="text-[11px] text-[var(--text-muted)]">kcal</p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <label htmlFor="product-grams" className="text-xs text-[var(--text-secondary)] shrink-0">
+          Menge (g)
+        </label>
+        <input
+          id="product-grams"
+          type="number"
+          min={5}
+          max={2000}
+          step={5}
+          value={grams}
+          onChange={(e) => onChangeGrams(Math.max(5, Number(e.target.value) || 0))}
+          className="w-24 min-h-[38px] rounded-xl bg-[var(--bg-well)] border border-[var(--border-hairline)] px-3 text-sm font-semibold tabular-nums text-[var(--text-primary)] focus:outline-none focus:border-white/25"
+        />
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {[50, 100, 150, 250].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => onChangeGrams(preset)}
+              className="px-2.5 py-1 rounded-lg bg-[var(--bg-well)] text-[11px] font-medium tabular-nums text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              {preset}g
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[var(--border-hairline)] text-center">
+        <div>
+          <p className="text-[11px] text-[var(--text-muted)]">Eiweiß</p>
+          <p className="text-sm font-semibold tabular-nums text-[var(--text-primary)]">{p} g</p>
+        </div>
+        <div>
+          <p className="text-[11px] text-[var(--text-muted)]">Kohlenhydrate</p>
+          <p className="text-sm font-semibold tabular-nums text-[var(--text-primary)]">{c} g</p>
+        </div>
+        <div>
+          <p className="text-[11px] text-[var(--text-muted)]">Fett</p>
+          <p className="text-sm font-semibold tabular-nums text-[var(--text-primary)]">{f} g</p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onSave}
+        className="w-full min-h-[44px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-sm font-semibold hover:opacity-90 transition-opacity"
+      >
+        Übernehmen ({kcal} kcal)
+      </button>
+    </div>
   );
 };

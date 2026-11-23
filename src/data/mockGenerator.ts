@@ -135,6 +135,11 @@ export function createDefaultProfile(
     preferredBedtime: '22:45',
     preferredWakeTime: '06:55',
     nutritionGoalMode: 'maintain',
+    nutritionGoalDeltaKcal: 0,
+    usesWearableActiveCalories: true,
+    dailyLifestyleNeat: 'sedentary',
+    manualActivityPal: 'moderate',
+    nutritionOnboardingCompleted: false,
     goals: ['improve_endurance', 'run_faster', 'improve_recovery', 'long_term_health'],
     runningTargets: {
       target10kSec: 42 * 60 + 30,

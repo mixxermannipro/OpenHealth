@@ -1,33 +1,76 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import { ChevronLeft } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useHealthStore } from './store/useHealthStore';
 import { useThemeEffect } from './hooks/useTheme';
 import { buildDailySnapshot } from './engine/calculations';
 import { OnboardingScreen } from './components/screens/OnboardingScreen';
 import { TodayScreen } from './components/screens/TodayScreen';
-import { RecoveryScreen } from './components/screens/RecoveryScreen';
-import { FitnessAgeScreen } from './components/screens/FitnessAgeScreen';
-import { SleepScreen } from './components/screens/SleepScreen';
-import { ActivityScreen } from './components/screens/ActivityScreen';
-import { NutritionScreen } from './components/screens/NutritionScreen';
-import { MealAnalyzeModal, MealModalMode } from './components/screens/MealAnalyzeModal';
-import { MoreScreen } from './components/screens/MoreScreen';
-import { HealthScreen } from './components/screens/HealthScreen';
-import { WorkoutDetailSheet } from './components/screens/WorkoutDetailSheet';
-import { JournalSheet } from './components/screens/JournalSheet';
-import { SettingsProfileSheet } from './components/screens/SettingsProfileSheet';
-import { ExplanationSheet, ExplanationTopic } from './components/ui/ExplanationSheet';
+import type { MealModalMode } from './components/screens/MealAnalyzeModal';
+import type { ExplanationTopic } from './components/ui/ExplanationSheet';
 import { BreathworkModal } from './components/ui/LiquidPrimitives';
 import { OfflineIndicator } from './components/ui/PWAInstallButton';
 import { AppShell } from './components/layout/AppShell';
+import {
+  IncomingSharePayload,
+  subscribeToIncomingMealShares,
+} from './services/mealShareReceiver';
+import { MealCategory, MealEntry, PrimaryTab } from './types/health';
 
-import { MealCategory, PrimaryTab } from './types/health';
+const RecoveryScreen = lazy(() =>
+  import('./components/screens/RecoveryScreen').then((m) => ({ default: m.RecoveryScreen }))
+);
+const FitnessAgeScreen = lazy(() =>
+  import('./components/screens/FitnessAgeScreen').then((m) => ({ default: m.FitnessAgeScreen }))
+);
+const SleepScreen = lazy(() =>
+  import('./components/screens/SleepScreen').then((m) => ({ default: m.SleepScreen }))
+);
+const ActivityScreen = lazy(() =>
+  import('./components/screens/ActivityScreen').then((m) => ({ default: m.ActivityScreen }))
+);
+const NutritionScreen = lazy(() =>
+  import('./components/screens/NutritionScreen').then((m) => ({ default: m.NutritionScreen }))
+);
+const MoreScreen = lazy(() =>
+  import('./components/screens/MoreScreen').then((m) => ({ default: m.MoreScreen }))
+);
+const HealthScreen = lazy(() =>
+  import('./components/screens/HealthScreen').then((m) => ({ default: m.HealthScreen }))
+);
+const MealAnalyzeModal = lazy(() =>
+  import('./components/screens/MealAnalyzeModal').then((m) => ({ default: m.MealAnalyzeModal }))
+);
+const WorkoutDetailSheet = lazy(() =>
+  import('./components/screens/WorkoutDetailSheet').then((m) => ({ default: m.WorkoutDetailSheet }))
+);
+const JournalSheet = lazy(() =>
+  import('./components/screens/JournalSheet').then((m) => ({ default: m.JournalSheet }))
+);
+const SettingsProfileSheet = lazy(() =>
+  import('./components/screens/SettingsProfileSheet').then((m) => ({
+    default: m.SettingsProfileSheet,
+  }))
+);
+const ExplanationSheet = lazy(() =>
+  import('./components/ui/ExplanationSheet').then((m) => ({ default: m.ExplanationSheet }))
+);
+
+const ScreenFallback = () => (
+  <div className="space-y-3.5 animate-pulse pt-2">
+    <div className="h-8 w-40 rounded-xl bg-[var(--bg-elevated)]" />
+    <div className="h-44 rounded-3xl bg-[var(--bg-surface)] border border-[var(--border-hairline)]" />
+    <div className="h-32 rounded-2xl bg-[var(--bg-surface)] border border-[var(--border-hairline)]" />
+  </div>
+);
 
 export default function App() {
   const {
     initialized,
     initialize,
+    syncTodayRollover,
+    completeOnboarding,
     theme,
     profile,
     activeTab,
@@ -44,7 +87,30 @@ export default function App() {
     journalEntries,
     selectedWorkoutId,
     setSelectedWorkoutId,
-  } = useHealthStore();
+  } = useHealthStore(
+    useShallow((s) => ({
+      initialized: s.initialized,
+      initialize: s.initialize,
+      syncTodayRollover: s.syncTodayRollover,
+      completeOnboarding: s.completeOnboarding,
+      theme: s.theme,
+      profile: s.profile,
+      activeTab: s.activeTab,
+      setActiveTab: s.setActiveTab,
+      detailView: s.detailView,
+      setDetailView: s.setDetailView,
+      selectedDate: s.selectedDate,
+      hrvObservations: s.hrvObservations,
+      rhrObservations: s.rhrObservations,
+      sleepSessions: s.sleepSessions,
+      workouts: s.workouts,
+      dailyActivities: s.dailyActivities,
+      bodyMeasurements: s.bodyMeasurements,
+      journalEntries: s.journalEntries,
+      selectedWorkoutId: s.selectedWorkoutId,
+      setSelectedWorkoutId: s.setSelectedWorkoutId,
+    }))
+  );
 
   const [explainTopic, setExplainTopic] = useState<ExplanationTopic | null>(null);
   const [journalOpen, setJournalOpen] = useState(false);
@@ -53,6 +119,9 @@ export default function App() {
   const [mealModalOpen, setMealModalOpen] = useState(false);
   const [mealModalMode, setMealModalMode] = useState<MealModalMode>('ai');
   const [mealModalCategory, setMealModalCategory] = useState<MealCategory | undefined>(undefined);
+  const [editingMeal, setEditingMeal] = useState<MealEntry | null>(null);
+  const [pendingSharePayload, setPendingSharePayload] = useState<IncomingSharePayload | null>(null);
+  const autostartConsumedRef = useRef(false);
 
   // Direction-aware transition tracking (left/right between tabs, push/pop for detail views)
   const TAB_ORDER: PrimaryTab[] = ['today', 'activity', 'sleep', 'nutrition', 'more'];
@@ -80,6 +149,81 @@ export default function App() {
       setActiveTab(tabParam);
     }
   }, [initialize, setActiveTab]);
+
+  // Keep todayKey fresh across midnight & when returning to the PWA tab
+  useEffect(() => {
+    const checkDate = () => syncTodayRollover();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') checkDate();
+    };
+    window.addEventListener('focus', checkDate);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    let midnightTimer: number | undefined;
+    const scheduleNextMidnight = () => {
+      const now = new Date();
+      const nextMidnight = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        2
+      );
+      const delayMs = Math.max(1000, nextMidnight.getTime() - now.getTime());
+      midnightTimer = window.setTimeout(() => {
+        checkDate();
+        scheduleNextMidnight();
+      }, delayMs);
+    };
+    scheduleNextMidnight();
+
+    return () => {
+      window.removeEventListener('focus', checkDate);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (midnightTimer !== undefined) window.clearTimeout(midnightTimer);
+    };
+  }, [syncTodayRollover]);
+
+  // Listen for Android Share-Intents (/share-meal?text=...) & Deep-Links (caltrack://log?...)
+  // on both cold start and while app is already running
+  useEffect(() => {
+    return subscribeToIncomingMealShares((payload) => {
+      setPendingSharePayload(payload);
+    });
+  }, []);
+
+  // Optional testability hook (?autostart=1) to bypass first-launch onboarding in automated checks
+  useEffect(() => {
+    if (!initialized || profile.onboardingCompleted || autostartConsumedRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('autostart') === '1') {
+      autostartConsumedRef.current = true;
+      completeOnboarding(
+        {
+          displayName: 'Manuel',
+          birthDate: '1997-04-12',
+          heightCm: 180,
+          weightKg: 76,
+          targetWeightKg: 74,
+          nutritionGoalMode: 'cut',
+          weeklyWeightChangeKg: -0.5,
+          nutritionGoalDeltaKcal: -550,
+          usesWearableActiveCalories: true,
+        },
+        []
+      );
+    }
+  }, [initialized, profile.onboardingCompleted, completeOnboarding]);
+
+  // Automatically open Zero-Cost KI-Import modal when an incoming Share-Intent or Deep-Link arrives
+  useEffect(() => {
+    if (!initialized || !profile.onboardingCompleted || !pendingSharePayload) return;
+    setActiveTab('nutrition');
+    setMealModalMode('ai');
+    setMealModalCategory(undefined);
+    setMealModalOpen(true);
+  }, [initialized, profile.onboardingCompleted, pendingSharePayload, setActiveTab]);
 
   const snapshot = useMemo(
     () =>
@@ -112,9 +256,24 @@ export default function App() {
     [workouts, selectedWorkoutId]
   );
 
-  const openMealModal = (mode: MealModalMode, category?: MealCategory) => {
+  const openMealModal = (mode: MealModalMode, category?: MealCategory, pastedText?: string) => {
+    setEditingMeal(null);
     setMealModalMode(mode);
     setMealModalCategory(category);
+    if (pastedText) {
+      setPendingSharePayload({
+        rawText: pastedText,
+        origin: 'share_intent',
+        receivedAt: Date.now(),
+      });
+    }
+    setMealModalOpen(true);
+  };
+
+  const openEditMealModal = (meal: MealEntry) => {
+    setEditingMeal(meal);
+    setMealModalMode('manual');
+    setMealModalCategory(meal.category);
     setMealModalOpen(true);
   };
 
@@ -217,6 +376,7 @@ export default function App() {
             snapshot={snapshot}
             onExplain={setExplainTopic}
             onOpenMealModal={openMealModal}
+            onEditMeal={openEditMealModal}
           />
         );
       case 'more':
@@ -245,25 +405,34 @@ export default function App() {
             exit={{ opacity: 0, x: navDir === 0 ? 0 : navDir * -16, y: navDir === 0 ? -4 : 0 }}
             transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
           >
-            {renderScreen()}
+            <Suspense fallback={<ScreenFallback />}>{renderScreen()}</Suspense>
           </motion.div>
         </AnimatePresence>
       </AppShell>
 
-      <WorkoutDetailSheet
-        workout={selectedWorkout}
-        onClose={() => setSelectedWorkoutId(null)}
-      />
-      <JournalSheet open={journalOpen} onClose={() => setJournalOpen(false)} />
-      <SettingsProfileSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <MealAnalyzeModal
-        open={mealModalOpen}
-        initialMode={mealModalMode}
-        initialCategory={mealModalCategory}
-        onClose={() => setMealModalOpen(false)}
-      />
+      <Suspense fallback={null}>
+        <WorkoutDetailSheet
+          workout={selectedWorkout}
+          onClose={() => setSelectedWorkoutId(null)}
+        />
+        <JournalSheet open={journalOpen} onClose={() => setJournalOpen(false)} />
+        <SettingsProfileSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <MealAnalyzeModal
+          open={mealModalOpen}
+          initialMode={mealModalMode}
+          initialCategory={mealModalCategory}
+          editingMeal={editingMeal}
+          initialSharePayload={pendingSharePayload}
+          onConsumeSharePayload={() => setPendingSharePayload(null)}
+          onClose={() => {
+            setMealModalOpen(false);
+            setEditingMeal(null);
+            setPendingSharePayload(null);
+          }}
+        />
+        <ExplanationSheet topic={explainTopic} onClose={() => setExplainTopic(null)} />
+      </Suspense>
       <BreathworkModal open={breathworkOpen} onClose={() => setBreathworkOpen(false)} />
-      <ExplanationSheet topic={explainTopic} onClose={() => setExplainTopic(null)} />
       <OfflineIndicator />
     </MotionConfig>
   );
