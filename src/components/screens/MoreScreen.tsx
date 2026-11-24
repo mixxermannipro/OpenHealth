@@ -14,7 +14,6 @@ import {
   Download,
   RotateCcw,
   PlusCircle,
-  Clock,
   Wind,
   NotebookPen,
   Activity,
@@ -60,6 +59,7 @@ import {
 } from '../../utils/haptics';
 import {
   exportJsonBackupNative,
+  isExternalAppInstalled,
   isNativeAndroid,
   openExternalWearableApp,
   writeTextToClipboard,
@@ -86,9 +86,6 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     connectedSources,
     aiPrivacy,
     updateAIPrivacy,
-    connectSimulatedProvider,
-    disconnectProvider,
-    simulateProviderSync,
     connectHealthConnect,
     requestHealthConnectBackgroundAccess,
     requestDisableBatteryOptimization,
@@ -96,6 +93,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
     openHealthConnectAppSettings,
     healthConnectStatus,
     healthConnectPermissions,
+    lastHealthConnectRecordCounts,
     batteryOptimizationIgnored,
     importExternalHealthFile,
     exportAllAsJson,
@@ -113,9 +111,6 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       connectedSources: s.connectedSources,
       aiPrivacy: s.aiPrivacy,
       updateAIPrivacy: s.updateAIPrivacy,
-      connectSimulatedProvider: s.connectSimulatedProvider,
-      disconnectProvider: s.disconnectProvider,
-      simulateProviderSync: s.simulateProviderSync,
       connectHealthConnect: s.connectHealthConnect,
       requestHealthConnectBackgroundAccess: s.requestHealthConnectBackgroundAccess,
       requestDisableBatteryOptimization: s.requestDisableBatteryOptimization,
@@ -123,6 +118,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       openHealthConnectAppSettings: s.openHealthConnectAppSettings,
       healthConnectStatus: s.healthConnectStatus,
       healthConnectPermissions: s.healthConnectPermissions,
+      lastHealthConnectRecordCounts: s.lastHealthConnectRecordCounts,
       batteryOptimizationIgnored: s.batteryOptimizationIgnored,
       importExternalHealthFile: s.importExternalHealthFile,
       exportAllAsJson: s.exportAllAsJson,
@@ -137,6 +133,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   const [promptCopied, setPromptCopied] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [showCorosGuide, setShowCorosGuide] = useState(false);
+  const [showGarminGuide, setShowGarminGuide] = useState(false);
   const [hapticsOn, setHapticsOn] = useState<boolean>(() => isHapticsEnabled());
   const [importProvider, setImportProvider] = useState<DeviceProviderId>('coros');
   const healthFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -238,20 +235,42 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
       return <Heart className="w-5 h-5 text-[var(--text-primary)]" />;
     };
 
-    const ORDER: DeviceProviderId[] = ['health_connect', 'coros', 'garmin', 'polar', 'apple_health'];
+    const ORDER: DeviceProviderId[] = nativeAndroid
+      ? ['health_connect', 'coros', 'garmin', 'polar']
+      : ['health_connect', 'coros', 'garmin', 'polar', 'apple_health'];
     const primarySources = ORDER.map((id) =>
       connectedSources.find((s) => s.providerId === id)
     ).filter((s): s is NonNullable<typeof s> => Boolean(s));
 
     const hcConnected = connectedSources.some((s) => s.providerId === 'health_connect' && s.connected);
 
-    const handleSourcePrimaryAction = (src: (typeof primarySources)[number]) => {
-      if (src.providerId === 'apple_health') {
-        setImportProvider('apple_health');
-        healthFileInputRef.current?.click();
-        return;
+    const openCorosApp = async () => {
+      haptics.selection();
+      const hasDist = await isExternalAppInstalled('com.yf.smart.coros.dist');
+      const targetPkg = hasDist ? 'com.yf.smart.coros.dist' : 'com.coros.coros';
+      const ok = await openExternalWearableApp(targetPkg);
+      if (!ok) {
+        showToast('COROS App nicht gefunden.', 'warning');
       }
-      if (src.providerId === 'health_connect' && nativeAndroid) {
+    };
+
+    const openGarminApp = async () => {
+      haptics.selection();
+      const ok = await openExternalWearableApp('com.garmin.android.apps.connectmobile');
+      if (!ok) {
+        showToast('Garmin Connect App nicht gefunden.', 'warning');
+      }
+    };
+
+    const handleSourcePrimaryAction = (src: (typeof primarySources)[number]) => {
+      if (src.providerId === 'health_connect') {
+        if (!nativeAndroid) {
+          showToast(
+            'Android Health Connect steht nur in der installierten Android-App zur Verfügung.',
+            'neutral'
+          );
+          return;
+        }
         if (src.connected) {
           syncHealthConnect({ silent: false });
         } else {
@@ -259,21 +278,24 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
         }
         return;
       }
+      if (src.providerId === 'apple_health') {
+        setImportProvider('apple_health');
+        healthFileInputRef.current?.click();
+        return;
+      }
       if (src.providerId === 'coros' && nativeAndroid) {
         haptics.selection();
         setShowCorosGuide((prev) => !prev);
         return;
       }
-      if (nativeAndroid) {
-        setImportProvider(src.providerId);
-        healthFileInputRef.current?.click();
+      if (src.providerId === 'garmin' && nativeAndroid) {
+        haptics.selection();
+        setShowGarminGuide((prev) => !prev);
         return;
       }
-      if (src.connected) {
-        simulateProviderSync(src.providerId);
-      } else {
-        connectSimulatedProvider(src.providerId);
-      }
+      haptics.tick();
+      setImportProvider(src.providerId);
+      healthFileInputRef.current?.click();
     };
 
     return (
@@ -315,16 +337,17 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
               {primarySources.map((src) => {
                 const isHC = src.providerId === 'health_connect';
                 const isCoros = src.providerId === 'coros';
+                const isGarmin = src.providerId === 'garmin';
                 const isApple = src.providerId === 'apple_health';
-                const isWearableViaImport = nativeAndroid && !isHC && !isApple;
+                const isWearableViaHC = nativeAndroid && !isHC && !isApple;
                 return (
                   <div key={src.providerId} className="space-y-2">
                     <div className="apple-card px-4 py-3.5 flex items-center justify-between gap-3">
                       <button
                         type="button"
-                        disabled={isSyncing}
+                        disabled={isSyncing || (isHC && !nativeAndroid)}
                         onClick={() => handleSourcePrimaryAction(src)}
-                        className="flex-1 flex items-center gap-3.5 text-left min-w-0"
+                        className="flex-1 flex items-center gap-3.5 text-left min-w-0 disabled:opacity-75"
                       >
                         <span className="w-10 h-10 rounded-xl bg-[var(--bg-well)] flex items-center justify-center shrink-0">
                           {sourceIcon(src.providerId)}
@@ -355,30 +378,47 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                                 </span>
                               </p>
                             )
+                          ) : isHC && !nativeAndroid ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-muted)]">
+                              <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                              <span>Nur in der Android-App verfügbar</span>
+                            </p>
                           ) : isCoros && nativeAndroid ? (
                             <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
                               <Watch className="w-3.5 h-3.5 shrink-0 text-[var(--accent-hrv)]" />
-                              <span>COROS Einrichtung (Health Connect &amp; .FIT)</span>
+                              <span>
+                                {hcConnected
+                                  ? 'Sync über Health Connect · & .FIT-Import'
+                                  : 'Einrichtung über Health Connect & .FIT'}
+                              </span>
                             </p>
-                          ) : isWearableViaImport ? (
+                          ) : isGarmin && nativeAndroid ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <Triangle className="w-3 h-3 shrink-0" />
+                              <span>
+                                {hcConnected
+                                  ? 'Sync über Health Connect · & .FIT/.GPX'
+                                  : 'Einrichtung über Health Connect & .FIT'}
+                              </span>
+                            </p>
+                          ) : isWearableViaHC ? (
                             <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
                               <Upload className="w-3.5 h-3.5 shrink-0" />
-                              <span>Via Health Connect oder .FIT/.GPX/.TCX</span>
+                              <span>
+                                {hcConnected
+                                  ? 'Via Health Connect oder .FIT/.GPX/.TCX'
+                                  : 'Via .FIT / .GPX / .TCX Datei-Import'}
+                              </span>
                             </p>
-                          ) : src.connected ? (
-                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
-                              <span className="w-2 h-2 rounded-full bg-[var(--accent-recovery)]" />
-                              <span>{t.more.connected}</span>
-                            </p>
-                          ) : isApple || src.comingSoon ? (
-                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-muted)]">
-                              <Clock className="w-3.5 h-3.5" />
+                          ) : isApple ? (
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <Upload className="w-3.5 h-3.5 shrink-0" />
                               <span>{t.more.xmlReady}</span>
                             </p>
                           ) : (
-                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12.5px] text-[var(--text-secondary)]">
-                              <PlusCircle className="w-3.5 h-3.5" />
-                              <span>{t.more.add}</span>
+                            <p className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-[var(--text-secondary)]">
+                              <Upload className="w-3.5 h-3.5 shrink-0" />
+                              <span>Datei-Import (.FIT / .GPX / .TCX)</span>
                             </p>
                           )}
                         </div>
@@ -394,28 +434,21 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                             Rechte
                           </button>
                         )}
-                        {src.connected && !(isHC && nativeAndroid) && (
+                        {!(isHC && !nativeAndroid) && (
                           <button
                             type="button"
-                            onClick={() => disconnectProvider(src.providerId)}
-                            className="rounded-full px-2.5 py-1 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-well)]"
+                            aria-label={`${src.name} öffnen`}
+                            disabled={isSyncing}
+                            onClick={() => handleSourcePrimaryAction(src)}
+                            className="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                           >
-                            {t.more.disconnect}
+                            {isHC && nativeAndroid && isSyncing ? (
+                              <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent-recovery)]" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4" />
+                            )}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          aria-label={`${src.name} synchronisieren`}
-                          disabled={isSyncing}
-                          onClick={() => handleSourcePrimaryAction(src)}
-                          className="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                        >
-                          {isHC && nativeAndroid && isSyncing ? (
-                            <RefreshCw className="w-4 h-4 animate-spin text-[var(--accent-recovery)]" />
-                          ) : (
-                            <ChevronRight className="w-4 h-4" />
-                          )}
-                        </button>
                       </div>
                     </div>
 
@@ -429,7 +462,7 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                           <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
                             Die COROS Partner-API ist leider nur für kommerzielle Server-Plattformen freigegeben.
                             Über <strong className="text-[var(--text-primary)]">Android Health Connect</strong> synchronisiert
-                            deine COROS-Uhr jedoch kostenlos &amp; vollautomatisch Schlaf, Herzfrequenz, Ruhepuls, Schritte
+                            deine COROS-Uhr jedoch kostenlos &amp; vollautomatisch Schlaf, Herzfrequenz, Ruhepuls, HRV, Schritte
                             und Trainings direkt in KADENZ:
                           </p>
                         </div>
@@ -440,24 +473,18 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                             <em>Profil → Einstellungen → Drittanbieter-Apps → Health Connect</em>.
                           </li>
                           <li>
-                            Aktiviere dort alle Kategorien (Schlaf, Herzfrequenz, Schritte, Trainings &amp; Distanz).
+                            Aktiviere dort alle Kategorien (Schlaf, Herzfrequenz, HRV, Ruhepuls, Schritte, Trainings &amp; Distanz).
                           </li>
                           <li>
-                            Verbinde oben <strong className="text-[var(--text-primary)]">Health Connect</strong> und erlaube den
-                            dauerhaften Hintergrund-Abgleich (alle 15 Min.).
+                            Synchronisiere deine Uhr in der COROS App und tippe hier auf{' '}
+                            <strong className="text-[var(--text-primary)]">Health Connect</strong>.
                           </li>
                         </ol>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                           <button
                             type="button"
-                            onClick={async () => {
-                              haptics.selection();
-                              const ok = await openExternalWearableApp('com.coros.coros');
-                              if (!ok) {
-                                showToast('COROS App nicht gefunden.', 'warning');
-                              }
-                            }}
+                            onClick={openCorosApp}
                             className="min-h-[40px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-xs font-semibold px-4 hover:opacity-90 transition-opacity"
                           >
                             COROS App öffnen
@@ -472,6 +499,42 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                             className="min-h-[40px] rounded-full bg-[var(--bg-well)] border border-[var(--border-hairline)] text-xs font-semibold text-[var(--text-primary)] px-4"
                           >
                             COROS .FIT / .GPX importieren
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Dedicated Garmin Android Setup & Direct .FIT Import Panel */}
+                    {isGarmin && nativeAndroid && showGarminGuide && (
+                      <div className="apple-card p-4 space-y-3 border border-[var(--border-hairline)] bg-[var(--bg-elevated)]/70">
+                        <div className="space-y-1">
+                          <p className="text-[13.5px] font-semibold text-[var(--text-primary)]">
+                            Garmin Connect über Health Connect nutzen
+                          </p>
+                          <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
+                            Garmin synchronisiert Schritte, Schlaf, Ruhepuls, Herzfrequenz und Trainings direkt über{' '}
+                            <strong className="text-[var(--text-primary)]">Android Health Connect</strong>. Öffne{' '}
+                            <em>Garmin Connect → Einstellungen → Verbundene Apps → Health Connect</em> und aktiviere alle Schreibrechte.
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={openGarminApp}
+                            className="min-h-[40px] rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-xs font-semibold px-4 hover:opacity-90 transition-opacity"
+                          >
+                            Garmin Connect öffnen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              haptics.tick();
+                              setImportProvider('garmin');
+                              healthFileInputRef.current?.click();
+                            }}
+                            className="min-h-[40px] rounded-full bg-[var(--bg-well)] border border-[var(--border-hairline)] text-xs font-semibold text-[var(--text-primary)] px-4"
+                          >
+                            Garmin .FIT / .TCX importieren
                           </button>
                         </div>
                       </div>
@@ -543,6 +606,66 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                     </p>
                   )}
                 </div>
+
+                {lastHealthConnectRecordCounts && (
+                  <div className="pt-2 border-t border-[var(--border-hairline)] space-y-2">
+                    <p className="text-[11.5px] font-medium text-[var(--text-secondary)]">
+                      Empfangene Health-Connect-Rohdaten:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 text-[11px] tabular-nums">
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        Herzfrequenz: {lastHealthConnectRecordCounts.heartRateSamples ?? lastHealthConnectRecordCounts.heartRate ?? 0}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        Ruhepuls: {lastHealthConnectRecordCounts.rhr ?? 0}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        HRV: {lastHealthConnectRecordCounts.hrv ?? 0}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        Schlaf: {lastHealthConnectRecordCounts.sleep ?? 0}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        Schritte: {lastHealthConnectRecordCounts.steps ?? 0}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)]">
+                        Trainings: {lastHealthConnectRecordCounts.workouts ?? 0}
+                      </span>
+                    </div>
+                    {((lastHealthConnectRecordCounts.sleep ?? 0) === 0 ||
+                      (lastHealthConnectRecordCounts.hrv ?? 0) === 0) && (
+                      <div className="rounded-xl bg-[var(--accent-calories)]/10 border border-[var(--accent-calories)]/25 p-2.5 text-[11.5px] text-[var(--text-secondary)] space-y-2">
+                        <p className="leading-snug">
+                          Health Connect liefert aktuell{' '}
+                          <strong className="text-[var(--text-primary)]">
+                            {(lastHealthConnectRecordCounts.sleep ?? 0) === 0 && (lastHealthConnectRecordCounts.hrv ?? 0) === 0
+                              ? 'keinen Schlaf und keine HRV'
+                              : (lastHealthConnectRecordCounts.sleep ?? 0) === 0
+                                ? 'keinen Schlaf'
+                                : 'keine HRV'}
+                          </strong>
+                          . Prüfe in der COROS- oder Garmin-App, ob die Schreibrechte für Schlaf &amp; HRV an Health Connect aktiviert sind.
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={openCorosApp}
+                            className="px-2.5 py-1 rounded-full bg-[var(--text-primary)] text-[var(--bg-canvas)] text-[11px] font-semibold"
+                          >
+                            COROS App öffnen
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openHealthConnectAppSettings()}
+                            className="px-2.5 py-1 rounded-full bg-[var(--bg-well)] text-[var(--text-primary)] text-[11px] font-medium"
+                          >
+                            Health Connect prüfen
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-2 pt-1">
                   {!healthConnectPermissions?.allGranted && (
@@ -813,8 +936,6 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
   // =====================================================================
   // DEFAULT HUB: MEHR (Clean 3-Group Apple Settings Architecture)
   // =====================================================================
-  const connectedCount = connectedSources.filter((s) => s.connected).length;
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -887,9 +1008,11 @@ export const MoreScreen: React.FC<MoreScreenProps> = ({
                       Datenquellen & Uhren
                     </p>
                     <p className="text-[12px] text-[var(--text-secondary)] truncate">
-                      {connectedCount > 0
-                        ? `${connectedCount} ${t.more.sourcesSubPrefix}`
-                        : 'Health Connect, Apple Health, COROS, Garmin'}
+                      {nativeAndroid
+                        ? connectedSources.some((s) => s.providerId === 'health_connect' && s.connected)
+                          ? 'Health Connect verbunden (COROS, Garmin, Polar)'
+                          : 'Health Connect verbinden (COROS, Garmin, Polar)'
+                        : 'Datei-Import (.FIT, .GPX, .TCX, .XML)'}
                     </p>
                   </div>
                 </div>

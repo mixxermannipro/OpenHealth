@@ -233,6 +233,7 @@ interface HealthStoreState {
   favoriteMeals: FavoriteMeal[];
   selectedWorkoutId: string | null;
   lastSyncReport: DeduplicationReport | null;
+  lastHealthConnectRecordCounts: Record<string, number> | null;
   healthConnectStatus: HealthConnectStatus | null;
   healthConnectPermissions: HealthConnectPermissionSummary | null;
   batteryOptimizationIgnored: boolean;
@@ -302,6 +303,24 @@ interface HealthStoreState {
 
 const initialTodayKey = toLocalDateKey(new Date());
 let initializeInFlight: Promise<void> | null = null;
+let lastAutoHcSyncMs = 0;
+
+function sanitizeConnectedSources(sources: ConnectedSource[]): {
+  sources: ConnectedSource[];
+  changed: boolean;
+} {
+  let changed = false;
+  const native = isNativeAndroid();
+  const next = sources.map((s) => {
+    const allowedConnected = native ? s.providerId === 'health_connect' : false;
+    if (s.connected && !allowedConnected) {
+      changed = true;
+      return { ...s, connected: false };
+    }
+    return s;
+  });
+  return { sources: next, changed };
+}
 
 async function applyHealthConnectBatchToStore(
   batch: HealthConnectMappedBatch,
@@ -359,6 +378,8 @@ async function applyHealthConnectBatchToStore(
     hydrationEntries: merged.hydrationEntries,
     meals: merged.meals,
     lastSyncReport: merged.report,
+    lastHealthConnectRecordCounts:
+      batch.recordCounts ?? state.lastHealthConnectRecordCounts,
   });
 
   await saveFullPersistedState({
@@ -421,6 +442,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
   favoriteMeals: [],
   selectedWorkoutId: null,
   lastSyncReport: null,
+  lastHealthConnectRecordCounts: null,
   healthConnectStatus: null,
   healthConnectPermissions: null,
   batteryOptimizationIgnored: false,
@@ -446,6 +468,15 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       }
 
       const nextAiPrivacy = { ...DEFAULT_AI_PRIVACY_SETTINGS, ...(persisted.aiPrivacy || {}) };
+      const rawSources =
+        persisted.connectedSources && persisted.connectedSources.length > 0
+          ? persisted.connectedSources
+          : createEmptyInitialSources();
+      const { sources: sanitizedSources, changed: sourcesSanitized } =
+        sanitizeConnectedSources(rawSources);
+      if (sourcesSanitized) {
+        db.sources.bulkPut(sanitizedSources).catch(() => {});
+      }
 
       set({
         initialized: true,
@@ -456,10 +487,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
         locale: hydratedLocale,
         aiPrivacy: nextAiPrivacy,
         profile: hydratedProfile,
-        connectedSources:
-          persisted.connectedSources && persisted.connectedSources.length > 0
-            ? persisted.connectedSources
-            : createEmptyInitialSources(),
+        connectedSources: sanitizedSources,
         sourcePriorities: persisted.sourcePriorities || DEFAULT_SOURCE_PRIORITIES,
         hrvObservations: persisted.hrvObservations || [],
         rhrObservations: persisted.rhrObservations || [],
@@ -618,15 +646,8 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
 
     const updatedSources = state.connectedSources.map((s) => ({
       ...s,
-      connected: s.providerId === 'health_connect' && isNativeAndroid()
-        ? false
-        : selectedProviders.includes(s.providerId),
-      lastSyncAt:
-        s.providerId === 'health_connect' && isNativeAndroid()
-          ? null
-          : selectedProviders.includes(s.providerId)
-            ? nowIso
-            : null,
+      connected: false,
+      lastSyncAt: null,
     }));
 
     // Record user's real initial body weight measurement for today
@@ -1028,8 +1049,13 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
         });
       }
 
+      let ingestedBg = false;
       if (permissions?.hasPendingBackgroundSnapshot) {
-        await get().ingestPendingBackgroundSnapshot();
+        ingestedBg = await get().ingestPendingBackgroundSnapshot();
+      }
+      if (hasAccess && !ingestedBg && Date.now() - lastAutoHcSyncMs > 60_000) {
+        lastAutoHcSyncMs = Date.now();
+        get().syncHealthConnect({ silent: true, daysBack: 14 }).catch(() => {});
       }
     } catch {
       // Ignore transient status read issues
@@ -1042,6 +1068,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       const state = get();
       const batch = await consumeHealthConnectBackgroundSnapshot(state.profile);
       if (!batch) return false;
+      lastAutoHcSyncMs = Date.now();
       await applyHealthConnectBatchToStore(batch, set, get, true);
       return true;
     } catch {
@@ -1187,6 +1214,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       const defaultDays = perms.historyReadGranted ? 90 : 30;
       const daysBack = options.daysBack ?? defaultDays;
       const batch = await syncHealthConnectBatch(get().profile, daysBack);
+      lastAutoHcSyncMs = Date.now();
       const report = await applyHealthConnectBatchToStore(batch, set, get, silent);
       return report;
     } catch {
@@ -1475,6 +1503,7 @@ export const useHealthStore = create<HealthStoreState>((set, get) => ({
       hydrationEntries: [],
       favoriteMeals: [],
       lastSyncReport: null,
+      lastHealthConnectRecordCounts: null,
     });
     get().showToast('Alle lokalen Daten wurden gelöscht.', 'neutral');
   },

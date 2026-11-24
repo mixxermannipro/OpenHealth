@@ -82,7 +82,8 @@ jobs:
 
           ./android/gradlew -p android assembleRelease
 
-          TAG="${GITHUB_REF_NAME:-dev}"
+          RAW_TAG="${GITHUB_REF_NAME:-dev}"
+          TAG="${RAW_TAG//\//-}"
           mkdir -p release-out
           APK_NAME="KADENZ-OpenHealth-${TAG}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "release-out/${APK_NAME}"

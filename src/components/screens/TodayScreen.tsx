@@ -221,6 +221,9 @@ export const TodayScreen: React.FC<TodayScreenProps> = ({
   }, [todayKey, bcp47]);
 
   const rhrToday = snapshot.rhr?.value ?? snapshot.recovery.rhrToday;
+  const hrLatestOrAvg = snapshot.activity?.latestHrBpm ?? snapshot.activity?.avgHrBpm ?? null;
+  const hrMin = snapshot.activity?.minHrBpm ?? null;
+  const hrMax = snapshot.activity?.maxHrBpm ?? null;
   const respRate = snapshot.activity?.respiratoryRateBpm ?? null;
   const ewmaRatio = snapshot.trainingLoad.ewmaAcwr ?? snapshot.trainingLoad.acuteChronicRatio;
 
@@ -762,8 +765,26 @@ export const TodayScreen: React.FC<TodayScreenProps> = ({
             variants={staggerCardVariants}
             className="col-span-2 apple-card p-4"
           >
-            <div className="grid grid-cols-3 divide-x divide-[var(--border-hairline)]">
-              <div className="pr-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+              <div className="pr-2 border-r border-[var(--border-hairline)]">
+                <p className="text-[11px] text-[var(--text-secondary)]">Herzfrequenz</p>
+                <p className="mt-1 text-[17px] font-bold tabular-nums text-[var(--text-primary)] leading-tight">
+                  {hrLatestOrAvg !== null ? (
+                    <>
+                      {hrLatestOrAvg}{' '}
+                      <span className="text-[11px] font-medium text-[var(--text-muted)]">bpm</span>
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </p>
+                {hrMin !== null && hrMax !== null && (
+                  <p className="mt-0.5 text-[10.5px] tabular-nums text-[var(--text-muted)]">
+                    {hrMin}–{hrMax} bpm
+                  </p>
+                )}
+              </div>
+              <div className="sm:pr-2 sm:border-r sm:border-[var(--border-hairline)]">
                 <p className="text-[11px] text-[var(--text-secondary)]">Ruhepuls</p>
                 <p className="mt-1 text-[17px] font-bold tabular-nums text-[var(--text-primary)] leading-tight">
                   {rhrToday !== null ? (
@@ -776,7 +797,7 @@ export const TodayScreen: React.FC<TodayScreenProps> = ({
                   )}
                 </p>
               </div>
-              <div className="px-3">
+              <div className="pr-2 border-r border-[var(--border-hairline)]">
                 <p className="text-[11px] text-[var(--text-secondary)]">Atemfrequenz</p>
                 <p className="mt-1 text-[17px] font-bold tabular-nums text-[var(--text-primary)] leading-tight">
                   {respRate !== null ? (
@@ -789,7 +810,7 @@ export const TodayScreen: React.FC<TodayScreenProps> = ({
                   )}
                 </p>
               </div>
-              <div className="pl-3">
+              <div>
                 <p className="text-[11px] text-[var(--text-secondary)]">EWMA Balance</p>
                 <p className="mt-1 text-[17px] font-bold tabular-nums text-[var(--text-primary)] leading-tight">
                   {ewmaRatio !== null ? formatNumberDE(ewmaRatio, 2) : '—'}

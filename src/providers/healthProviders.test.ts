@@ -242,3 +242,159 @@ test('mergeSyncedBatch merges external meals, skin temperature, muscle mass, and
   assert.equal(merged.meals[0].title, 'Haferflocken mit Beeren');
 });
 
+test('mergeSyncedBatch updates same-day HRV, RHR, body composition, and daily heart rate metrics across syncs', () => {
+  const todayKey = '2026-11-24';
+  const merged = mergeSyncedBatch(
+    {
+      workouts: [],
+      hrvObservations: [
+        {
+          id: 'hc_hrv_2026-11-24_garmin',
+          date: todayKey,
+          timestamp: '2026-11-24T06:00:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_hrv_old_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'hrv_rmssd',
+          unit: 'ms',
+          value: 52,
+          recordingContext: 'overnight_avg',
+        },
+      ],
+      rhrObservations: [
+        {
+          id: 'hc_rhr_2026-11-24_garmin',
+          date: todayKey,
+          timestamp: '2026-11-24T06:00:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_rhr_old_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'resting_hr',
+          unit: 'bpm',
+          value: 44,
+          recordingContext: 'overnight_min',
+        },
+      ],
+      sleepSessions: [],
+      dailyActivities: [
+        {
+          id: 'hc_act_2026-11-24',
+          date: todayKey,
+          timestamp: '2026-11-24T08:00:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_act_2026-11-24',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'daily_activity',
+          steps: 3200,
+          activeMinutes: 24,
+          estimatedEnergyKcal: 1900,
+        },
+      ],
+      bodyMeasurements: [
+        {
+          id: 'hc_body_2026-11-24',
+          date: todayKey,
+          timestamp: '2026-11-24T07:00:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_body_old_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'body_measurement',
+          weightKg: 81.2,
+        },
+      ],
+    },
+    {
+      providerId: 'health_connect',
+      syncedAt: '2026-11-24T13:30:00Z',
+      workouts: [],
+      hrvObservations: [
+        {
+          id: 'hc_hrv_2026-11-24_garmin',
+          date: todayKey,
+          timestamp: '2026-11-24T07:30:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_hrv_new_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'hrv_rmssd',
+          unit: 'ms',
+          value: 64.5,
+          recordingContext: 'overnight_avg',
+        },
+      ],
+      rhrObservations: [
+        {
+          id: 'hc_rhr_2026-11-24_garmin',
+          date: todayKey,
+          timestamp: '2026-11-24T07:30:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_rhr_new_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'resting_hr',
+          unit: 'bpm',
+          value: 41,
+          recordingContext: 'overnight_min',
+        },
+      ],
+      sleepSessions: [],
+      dailyActivities: [
+        {
+          id: 'hc_act_2026-11-24',
+          date: todayKey,
+          timestamp: '2026-11-24T13:30:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_act_2026-11-24',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'daily_activity',
+          steps: 3200,
+          activeMinutes: 24,
+          estimatedEnergyKcal: 2050,
+          avgHrBpm: 68,
+          minHrBpm: 41,
+          maxHrBpm: 142,
+          latestHrBpm: 72,
+          hrSampleCount: 184,
+        },
+      ],
+      bodyMeasurements: [
+        {
+          id: 'hc_body_2026-11-24',
+          date: todayKey,
+          timestamp: '2026-11-24T07:15:00Z',
+          sourceProvider: 'garmin',
+          sourceRecordId: 'hc_body_new_id',
+          dataQuality: 'high',
+          provenance: 'measured',
+          metricType: 'body_measurement',
+          weightKg: 81.0,
+          bodyFatPercent: 14.2,
+        },
+      ],
+    },
+    {
+      steps: 'health_connect',
+      heartRate: 'coros',
+      sleep: 'health_connect',
+      workouts: 'coros',
+      weight: 'withings',
+      bodyComposition: 'withings',
+    }
+  );
+
+  assert.equal(merged.hrvObservations[0].value, 64.5);
+  assert.equal(merged.rhrObservations[0].value, 41);
+  assert.equal(merged.dailyActivities[0].avgHrBpm, 68);
+  assert.equal(merged.dailyActivities[0].minHrBpm, 41);
+  assert.equal(merged.dailyActivities[0].maxHrBpm, 142);
+  assert.equal(merged.dailyActivities[0].latestHrBpm, 72);
+  assert.equal(merged.dailyActivities[0].hrSampleCount, 184);
+  assert.equal(merged.bodyMeasurements[0].weightKg, 81.0);
+  assert.equal(merged.bodyMeasurements[0].bodyFatPercent, 14.2);
+});
+

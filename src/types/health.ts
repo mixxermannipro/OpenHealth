@@ -348,6 +348,11 @@ export interface DailyActivitySummary extends ObservationBase {
   bloodGlucoseMgDl?: number;
   bmrKcal?: number;
   mindfulnessMinutes?: number;
+  avgHrBpm?: number;
+  minHrBpm?: number;
+  maxHrBpm?: number;
+  latestHrBpm?: number;
+  hrSampleCount?: number;
 }
 
 export interface BodyMeasurement extends ObservationBase {

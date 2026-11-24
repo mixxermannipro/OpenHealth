@@ -42,19 +42,13 @@ import { formatNumberDE } from '../../utils/formatters';
 import { haptics } from '../../utils/haptics';
 import { LiquidSlider } from '../ui/LiquidSlider';
 import { AnimatedNumber, APPLE_EASE, SNAPPY_SPRING } from '../ui/MotionPrimitives';
+import { isNativeAndroid } from '../../services/androidBridge';
 
 const CUT_PACE_VALUES = [0.25, 0.5, 0.75, 1.0];
 const BUILD_PACE_VALUES = [0.15, 0.25, 0.4];
 
-const QUICK_PLATFORMS: { id: DeviceProviderId; label: string }[] = [
-  { id: 'health_connect', label: 'Health Connect' },
-  { id: 'apple_health', label: 'Apple Health' },
-  { id: 'coros', label: 'COROS' },
-  { id: 'garmin', label: 'Garmin' },
-  { id: 'polar', label: 'Polar' },
-];
-
 export const OnboardingScreen: React.FC = () => {
+  const nativeAndroid = isNativeAndroid();
   const { profile, completeOnboarding } = useHealthStore();
   const { t, locale, setLocale } = useI18n();
   const no = t.nutritionOnboarding;
@@ -97,7 +91,9 @@ export const OnboardingScreen: React.FC = () => {
   const [manualPal, setManualPal] = useState<ManualActivityPal>(
     profile.manualActivityPal || 'moderate'
   );
-  const [selectedPlatforms, setSelectedPlatforms] = useState<DeviceProviderId[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<DeviceProviderId[]>(() =>
+    isNativeAndroid() ? ['health_connect'] : []
+  );
 
   const computedAge = useMemo(
     () => calculateAgeFromBirthDate(birthDate, profile.age || 25),
@@ -938,36 +934,43 @@ export const OnboardingScreen: React.FC = () => {
                       </div>
 
                       {/* Optional Platform Hint Selection */}
-                      <div className="apple-card p-4 space-y-2.5">
-                        <div>
+                      {nativeAndroid ? (
+                        <div className="apple-card p-4 space-y-2.5">
+                          <div>
+                            <p className="text-[13px] font-semibold text-[var(--text-primary)]">
+                              Android Health Connect
+                            </p>
+                            <p className="text-[11.5px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                              COROS, Garmin, Polar, Samsung &amp; Fitbit synchronisieren auf Android automatisch über Health Connect.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => togglePlatform('health_connect')}
+                              className={`min-h-[36px] px-3.5 rounded-full text-[12px] font-medium transition-colors inline-flex items-center gap-1.5 ${
+                                selectedPlatforms.includes('health_connect')
+                                  ? 'bg-[var(--accent-recovery)] text-black font-semibold'
+                                  : 'bg-[var(--bg-well)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                              }`}
+                            >
+                              {selectedPlatforms.includes('health_connect') && (
+                                <Check className="w-3.5 h-3.5" />
+                              )}
+                              <span>Health Connect direkt verbinden</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="apple-card p-4 space-y-1.5">
                           <p className="text-[13px] font-semibold text-[var(--text-primary)]">
-                            {copy.preferredDevicesLabel}
+                            Wearables &amp; Datei-Import
                           </p>
-                          <p className="text-[11.5px] text-[var(--text-muted)] mt-0.5">
-                            {copy.preferredDevicesHint}
+                          <p className="text-[11.5px] text-[var(--text-muted)] leading-snug">
+                            Im Web kannst du unter <em>Mehr → Datenquellen</em> jederzeit Trainings &amp; Körperdaten per .FIT, .GPX, .TCX oder .XML importieren. Automatischer Health-Connect-Sync ist in der Android-App verfügbar.
                           </p>
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {QUICK_PLATFORMS.map((p) => {
-                            const active = selectedPlatforms.includes(p.id);
-                            return (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => togglePlatform(p.id)}
-                                className={`min-h-[34px] px-3 rounded-full text-[12px] font-medium transition-colors inline-flex items-center gap-1.5 ${
-                                  active
-                                    ? 'bg-[var(--text-primary)] text-[var(--bg-canvas)]'
-                                    : 'bg-[var(--bg-well)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
-                              >
-                                {active && <Check className="w-3 h-3" />}
-                                <span>{p.label}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                      )}
                     </motion.div>
                   ) : (
                     <motion.div

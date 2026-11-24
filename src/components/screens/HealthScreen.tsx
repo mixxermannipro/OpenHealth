@@ -37,7 +37,7 @@ interface BiometricRow {
   provenance: MeasurementProvenance;
   sourceLabel: string;
   explanation: string;
-  seriesKey: 'hrv' | 'rhr' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp' | 'spo2';
+  seriesKey: 'hrv' | 'rhr' | 'hr_daily' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp' | 'spo2';
   infoTopic: ExplanationTopic;
   unit: string;
   color: string;
@@ -96,6 +96,33 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
   const biometricRows: BiometricRow[] = useMemo(() => {
     const { hrv, rhr, activity, sleep, body, baseline } = snapshot;
     return [
+      {
+        id: 'bio_hr_daily',
+        category: 'Herz & Kreislauf',
+        title: 'Herzfrequenz (Tag)',
+        valueText:
+          activity?.latestHrBpm !== undefined || activity?.avgHrBpm !== undefined
+            ? `${activity.latestHrBpm ?? activity.avgHrBpm} /min`
+            : 'Nicht gemessen',
+        baselineText:
+          activity?.avgHrBpm !== undefined && activity?.minHrBpm !== undefined && activity?.maxHrBpm !== undefined
+            ? `Ø ${activity.avgHrBpm} · ${activity.minHrBpm}–${activity.maxHrBpm} /min`
+            : 'Ganztägige Messwerte',
+        provenance:
+          activity?.avgHrBpm !== undefined || activity?.latestHrBpm !== undefined
+            ? 'measured'
+            : 'missing',
+        sourceLabel:
+          activity && (activity.avgHrBpm !== undefined || activity.latestHrBpm !== undefined)
+            ? de.providers[activity.sourceProvider]
+            : '—',
+        explanation:
+          'Aktuellste sowie tägliche Durchschnitts-, Minimal- und Maximal-Herzfrequenz aus deinen Health-Connect-Messpunkten.',
+        seriesKey: 'hr_daily',
+        infoTopic: 'biometrics',
+        unit: '/min',
+        color: 'var(--accent-strain)',
+      },
       {
         id: 'bio_rhr',
         category: 'Herz & Kreislauf',
@@ -235,6 +262,8 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
         val = hrvObservations.find((h) => h.date === dk)?.value ?? null;
       } else if (activeBiometric.seriesKey === 'rhr') {
         val = rhrObservations.find((r) => r.date === dk)?.value ?? null;
+      } else if (activeBiometric.seriesKey === 'hr_daily') {
+        val = dailyActivities.find((a) => a.date === dk)?.avgHrBpm ?? null;
       } else if (activeBiometric.seriesKey === 'vo2') {
         val = dailyActivities.find((a) => a.date === dk)?.vo2MaxEstimate ?? null;
       } else if (activeBiometric.seriesKey === 'steps') {
@@ -358,7 +387,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
 
       {/* Apple Segmented Sub-tabs */}
       <div
-        className="inline-flex flex-wrap items-center gap-0.5 p-1 rounded-full bg-[var(--bg-well)]"
+        className="grid grid-cols-3 sm:inline-grid sm:grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--bg-well)]"
         role="tablist"
         aria-label="Körperbereiche"
       >
@@ -377,7 +406,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
               role="tab"
               aria-selected={active}
               onClick={() => setHealthSubTab(tab.id)}
-              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
+              className={`min-h-[36px] px-2.5 sm:px-4 py-1.5 rounded-xl text-[11.5px] sm:text-xs font-medium whitespace-nowrap truncate transition-all ${
                 active
                   ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
