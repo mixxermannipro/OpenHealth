@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion, MotionConfig } from 'motion/react';
+import { motion, MotionConfig } from 'motion/react';
 import { ChevronLeft } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useHealthStore } from './store/useHealthStore';
@@ -11,6 +11,7 @@ import type { MealModalMode } from './components/screens/MealAnalyzeModal';
 import type { ExplanationTopic } from './components/ui/ExplanationSheet';
 import { BreathworkModal } from './components/ui/LiquidPrimitives';
 import { OfflineIndicator } from './components/ui/PWAInstallButton';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { AppShell } from './components/layout/AppShell';
 import {
   IncomingSharePayload,
@@ -170,8 +171,10 @@ export default function App() {
   }, [initialize, setActiveTab]);
 
   // Keep todayKey fresh across midnight, ingest 15-min background Health Connect snapshots,
-  // and run a fresh foreground sync on resume
+  // and run a fresh foreground sync on mount & resume
   useEffect(() => {
+    if (!initialized || !profile.onboardingCompleted) return;
+
     const maybeAutoSyncHealthConnect = async () => {
       if (!isNativeAndroid()) return;
       await ingestPendingBackgroundSnapshot().catch(() => {});
@@ -191,6 +194,9 @@ export default function App() {
       syncTodayRollover();
       maybeAutoSyncHealthConnect();
     };
+    // Trigger initial foreground Health Connect check/sync on mount
+    maybeAutoSyncHealthConnect();
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') checkDate();
     };
@@ -222,6 +228,8 @@ export default function App() {
       if (midnightTimer !== undefined) window.clearTimeout(midnightTimer);
     };
   }, [
+    initialized,
+    profile.onboardingCompleted,
     syncTodayRollover,
     aiPrivacy.backgroundSync,
     connectedSources,
@@ -501,18 +509,17 @@ export default function App() {
         onOpenJournal={() => setJournalOpen(true)}
         onOpenBreathwork={() => setBreathworkOpen(true)}
       >
-        <AnimatePresence mode="wait" initial={false} custom={navDir}>
+        <ErrorBoundary>
           <motion.div
             key={`${activeTab}:${detailView}`}
-            custom={navDir}
-            initial={{ opacity: 0, x: navDir === 0 ? 0 : navDir * 22, y: navDir === 0 ? 8 : 0 }}
+            initial={{ opacity: 0, x: navDir === 0 ? 0 : navDir * 14, y: navDir === 0 ? 6 : 0 }}
             animate={{ opacity: 1, x: 0, y: 0 }}
-            exit={{ opacity: 0, x: navDir === 0 ? 0 : navDir * -16, y: navDir === 0 ? -4 : 0 }}
-            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="will-change-transform"
           >
             <Suspense fallback={<ScreenFallback />}>{renderScreen()}</Suspense>
           </motion.div>
-        </AnimatePresence>
+        </ErrorBoundary>
       </AppShell>
 
       <Suspense fallback={null}>

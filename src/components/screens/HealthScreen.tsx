@@ -37,7 +37,7 @@ interface BiometricRow {
   provenance: MeasurementProvenance;
   sourceLabel: string;
   explanation: string;
-  seriesKey: 'hrv' | 'rhr' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp' | 'spo2';
+  seriesKey: 'hrv' | 'rhr' | 'hr_daily' | 'vo2' | 'steps' | 'sleep' | 'weight' | 'resp' | 'spo2';
   infoTopic: ExplanationTopic;
   unit: string;
   color: string;
@@ -96,6 +96,33 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
   const biometricRows: BiometricRow[] = useMemo(() => {
     const { hrv, rhr, activity, sleep, body, baseline } = snapshot;
     return [
+      {
+        id: 'bio_hr_daily',
+        category: 'Herz & Kreislauf',
+        title: 'Herzfrequenz (Tag)',
+        valueText:
+          activity?.latestHrBpm !== undefined || activity?.avgHrBpm !== undefined
+            ? `${activity.latestHrBpm ?? activity.avgHrBpm} /min`
+            : 'Nicht gemessen',
+        baselineText:
+          activity?.avgHrBpm !== undefined && activity?.minHrBpm !== undefined && activity?.maxHrBpm !== undefined
+            ? `Ø ${activity.avgHrBpm} · ${activity.minHrBpm}–${activity.maxHrBpm} /min`
+            : 'Ganztägige Messwerte',
+        provenance:
+          activity?.avgHrBpm !== undefined || activity?.latestHrBpm !== undefined
+            ? 'measured'
+            : 'missing',
+        sourceLabel:
+          activity && (activity.avgHrBpm !== undefined || activity.latestHrBpm !== undefined)
+            ? de.providers[activity.sourceProvider]
+            : '—',
+        explanation:
+          'Aktuellste sowie tägliche Durchschnitts-, Minimal- und Maximal-Herzfrequenz aus deinen Health-Connect-Messpunkten.',
+        seriesKey: 'hr_daily',
+        infoTopic: 'biometrics',
+        unit: '/min',
+        color: 'var(--accent-strain)',
+      },
       {
         id: 'bio_rhr',
         category: 'Herz & Kreislauf',
@@ -235,6 +262,8 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
         val = hrvObservations.find((h) => h.date === dk)?.value ?? null;
       } else if (activeBiometric.seriesKey === 'rhr') {
         val = rhrObservations.find((r) => r.date === dk)?.value ?? null;
+      } else if (activeBiometric.seriesKey === 'hr_daily') {
+        val = dailyActivities.find((a) => a.date === dk)?.avgHrBpm ?? null;
       } else if (activeBiometric.seriesKey === 'vo2') {
         val = dailyActivities.find((a) => a.date === dk)?.vo2MaxEstimate ?? null;
       } else if (activeBiometric.seriesKey === 'steps') {

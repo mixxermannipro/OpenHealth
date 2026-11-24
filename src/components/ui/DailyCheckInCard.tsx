@@ -103,7 +103,7 @@ export const DailyCheckInCard: React.FC<DailyCheckInCardProps> = ({
                 }`}
               />
               <p className="text-[13px] font-medium text-[var(--text-primary)] truncate">
-                {t.checkin.feelingToday}:{' '}
+                {t.checkin.feelingToday}{' '}
                 <span className="text-[var(--text-secondary)] font-normal">
                   {t.checkin.sleepWord}{' '}
                   {existing.subjectiveSleepQuality !== undefined

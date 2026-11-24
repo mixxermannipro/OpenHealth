@@ -341,7 +341,13 @@ export function mergeSyncedBatch(
     const idx = nextHrv.findIndex((ex) => ex.date === h.date);
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (h.sourceProvider === priorities.heartRate || nextHrv[idx].sourceRecordId === h.sourceRecordId) {
+      const existing = nextHrv[idx];
+      if (
+        h.sourceProvider === priorities.heartRate ||
+        existing.id === h.id ||
+        existing.sourceProvider === h.sourceProvider ||
+        existing.sourceRecordId === h.sourceRecordId
+      ) {
         nextHrv[idx] = h;
       }
     } else {
@@ -359,6 +365,8 @@ export function mergeSyncedBatch(
       const existingIsEstimate = existing.provenance !== 'measured';
       if (
         r.sourceProvider === priorities.heartRate ||
+        existing.id === r.id ||
+        existing.sourceProvider === r.sourceProvider ||
         existing.sourceRecordId === r.sourceRecordId ||
         (incomingIsMeasured && existingIsEstimate)
       ) {
@@ -400,19 +408,35 @@ export function mergeSyncedBatch(
       const existing = nextActivities[idx];
       if (
         a.sourceProvider === priorities.steps ||
+        existing.id === a.id ||
         existing.sourceRecordId === a.sourceRecordId ||
-        a.steps > existing.steps
+        a.steps >= existing.steps ||
+        a.hrSampleCount !== undefined
       ) {
         nextActivities[idx] = {
           ...existing,
           ...a,
           steps: Math.max(existing.steps, a.steps),
           activeMinutes: Math.max(existing.activeMinutes, a.activeMinutes),
+          estimatedEnergyKcal: Math.max(existing.estimatedEnergyKcal, a.estimatedEnergyKcal),
           activeCaloriesKcal: a.activeCaloriesKcal ?? existing.activeCaloriesKcal,
+          floorsClimbed: a.floorsClimbed ?? existing.floorsClimbed,
+          wheelchairPushes: a.wheelchairPushes ?? existing.wheelchairPushes,
           vo2MaxEstimate: a.vo2MaxEstimate ?? existing.vo2MaxEstimate,
           spo2Percent: a.spo2Percent ?? existing.spo2Percent,
           respiratoryRateBpm: a.respiratoryRateBpm ?? existing.respiratoryRateBpm,
           skinTempDeviationC: a.skinTempDeviationC ?? existing.skinTempDeviationC,
+          bodyTempC: a.bodyTempC ?? existing.bodyTempC,
+          bloodPressureSystolic: a.bloodPressureSystolic ?? existing.bloodPressureSystolic,
+          bloodPressureDiastolic: a.bloodPressureDiastolic ?? existing.bloodPressureDiastolic,
+          bloodGlucoseMgDl: a.bloodGlucoseMgDl ?? existing.bloodGlucoseMgDl,
+          bmrKcal: a.bmrKcal ?? existing.bmrKcal,
+          mindfulnessMinutes: a.mindfulnessMinutes ?? existing.mindfulnessMinutes,
+          avgHrBpm: a.avgHrBpm ?? existing.avgHrBpm,
+          minHrBpm: a.minHrBpm ?? existing.minHrBpm,
+          maxHrBpm: a.maxHrBpm ?? existing.maxHrBpm,
+          latestHrBpm: a.latestHrBpm ?? existing.latestHrBpm,
+          hrSampleCount: a.hrSampleCount ?? existing.hrSampleCount,
         };
       }
     } else {
@@ -429,12 +453,22 @@ export function mergeSyncedBatch(
     );
     if (idx !== -1) {
       deduplicatedObservations++;
-      if (b.sourceProvider === priorities.weight || nextBody[idx].sourceRecordId === b.sourceRecordId) {
+      const existing = nextBody[idx];
+      if (
+        b.sourceProvider === priorities.weight ||
+        existing.id === b.id ||
+        existing.sourceProvider === b.sourceProvider ||
+        existing.sourceRecordId === b.sourceRecordId
+      ) {
         nextBody[idx] = {
-          ...nextBody[idx],
+          ...existing,
           ...b,
-          bodyFatPercent: b.bodyFatPercent ?? nextBody[idx].bodyFatPercent,
-          muscleMassKg: b.muscleMassKg ?? nextBody[idx].muscleMassKg,
+          bodyFatPercent: b.bodyFatPercent ?? existing.bodyFatPercent,
+          muscleMassKg: b.muscleMassKg ?? existing.muscleMassKg,
+          boneMassKg: b.boneMassKg ?? existing.boneMassKg,
+          bodyWaterKg: b.bodyWaterKg ?? existing.bodyWaterKg,
+          heightCm: b.heightCm ?? existing.heightCm,
+          bmrKcal: b.bmrKcal ?? existing.bmrKcal,
         };
       }
     } else {

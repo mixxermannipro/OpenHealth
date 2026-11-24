@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion, useSpring } from 'motion/react';
 import { formatNumberDE } from '../../utils/formatters';
 
@@ -24,9 +24,15 @@ export const PAGE_TRANSITION = {
   transition: { duration: 0.24, ease: APPLE_EASE },
 };
 
+function formatAnimatedVal(val: number, decimals: number): string {
+  return decimals > 0
+    ? formatNumberDE(Number(val.toFixed(decimals)), decimals)
+    : formatNumberDE(Math.round(val), 0);
+}
+
 /**
  * Smooth spring-interpolated German number readout for Apple/Whoop hero metrics.
- * Animates live whenever the numeric value updates (e.g. after logging check-in or meal).
+ * Updates DOM text directly via ref so animations run at 60–120 fps without React re-renders.
  */
 export const AnimatedNumber: React.FC<{
   value: number;
@@ -36,11 +42,11 @@ export const AnimatedNumber: React.FC<{
   className?: string;
 }> = ({ value, decimals = 0, suffix = '', prefix = '', className = '' }) => {
   const spring = useSpring(value, {
-    stiffness: 110,
-    damping: 22,
-    mass: 0.7,
+    stiffness: 135,
+    damping: 24,
+    mass: 0.65,
   });
-  const [display, setDisplay] = useState<number>(value);
+  const spanRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     spring.set(value);
@@ -48,20 +54,17 @@ export const AnimatedNumber: React.FC<{
 
   useEffect(() => {
     const unsubscribe = spring.on('change', (latest) => {
-      setDisplay(latest);
+      if (spanRef.current) {
+        spanRef.current.textContent = `${prefix}${formatAnimatedVal(latest, decimals)}${suffix}`;
+      }
     });
     return () => unsubscribe();
-  }, [spring]);
-
-  const formatted =
-    decimals > 0
-      ? formatNumberDE(Number(display.toFixed(decimals)), decimals)
-      : formatNumberDE(Math.round(display), 0);
+  }, [spring, decimals, prefix, suffix]);
 
   return (
-    <span className={className}>
+    <span ref={spanRef} className={className}>
       {prefix}
-      {formatted}
+      {formatAnimatedVal(value, decimals)}
       {suffix}
     </span>
   );
@@ -72,20 +75,20 @@ export const staggerParentVariants = {
   show: {
     opacity: 1,
     transition: {
-      staggerChildren: 0.045,
-      delayChildren: 0.02,
+      staggerChildren: 0.032,
+      delayChildren: 0.01,
     },
   },
 };
 
 export const staggerCardVariants = {
-  hidden: { opacity: 0, y: 12, scale: 0.99 },
+  hidden: { opacity: 0, y: 10, scale: 0.99 },
   show: {
     opacity: 1,
     y: 0,
     scale: 1,
     transition: {
-      duration: 0.34,
+      duration: 0.24,
       ease: APPLE_EASE,
     },
   },

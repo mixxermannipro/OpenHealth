@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Home,
@@ -48,17 +48,22 @@ export const AppShell: React.FC<AppShellProps> = ({
     );
   const { t } = useI18n();
 
-  const navItems: {
-    id: PrimaryTab;
-    label: string;
-    icon: React.FC<{ className?: string; strokeWidth?: number }>;
-  }[] = [
-    { id: 'today', label: t.nav.today, icon: Home },
-    { id: 'activity', label: t.nav.activity, icon: Activity },
-    { id: 'sleep', label: t.nav.sleep, icon: Moon },
-    { id: 'nutrition', label: t.nav.nutrition, icon: Utensils },
-    { id: 'more', label: t.nav.more, icon: MoreHorizontal },
-  ];
+  const navItems = useMemo<
+    {
+      id: PrimaryTab;
+      label: string;
+      icon: React.FC<{ className?: string; strokeWidth?: number }>;
+    }[]
+  >(
+    () => [
+      { id: 'today', label: t.nav.today, icon: Home },
+      { id: 'activity', label: t.nav.activity, icon: Activity },
+      { id: 'sleep', label: t.nav.sleep, icon: Moon },
+      { id: 'nutrition', label: t.nav.nutrition, icon: Utensils },
+      { id: 'more', label: t.nav.more, icon: MoreHorizontal },
+    ],
+    [t.nav.today, t.nav.activity, t.nav.sleep, t.nav.nutrition, t.nav.more]
+  );
 
   const viewKey = `${activeTab}:${detailView}`;
   const navVisible = useScrollVisibility({
@@ -248,23 +253,29 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </main>
 
+      {/* Subtle Bottom Edge Fade so scrolled cards transition softly behind the dock */}
+      <div
+        aria-hidden="true"
+        className="lg:hidden pointer-events-none fixed bottom-0 inset-x-0 h-24 bg-gradient-to-t from-[var(--bg-canvas)] via-[var(--bg-canvas)]/75 to-transparent z-20"
+      />
+
       {/* Mobile Floating Liquid Glass 5-Icon Bottom Pill — Dynamically hides on scroll down, springs back on scroll up */}
       <motion.div
         initial={false}
         animate={{
           y: navVisible ? 0 : 104,
           opacity: navVisible ? 1 : 0,
-          scale: navVisible ? 1 : 0.92,
+          scale: navVisible ? 1 : 0.94,
         }}
-        transition={{ type: 'spring', stiffness: 420, damping: 34, mass: 0.85 }}
-        className="lg:hidden fixed bottom-0 inset-x-0 z-30 pointer-events-none flex justify-center px-4 pb-[max(0.85rem,var(--android-safe-bottom,env(safe-area-inset-bottom,0px)))]"
+        transition={{ type: 'spring', stiffness: 460, damping: 36, mass: 0.8 }}
+        className="lg:hidden fixed bottom-0 inset-x-0 z-30 pointer-events-none flex justify-center px-4 pb-[max(0.85rem,var(--android-safe-bottom,env(safe-area-inset-bottom,0px)))] will-change-transform"
       >
         <nav
           aria-label="Mobile Navigation"
           data-nav-visible={navVisible ? 'true' : 'false'}
           className={`${
             navVisible ? 'pointer-events-auto' : 'pointer-events-none'
-          } liquid-glass rounded-full p-1.5 w-full max-w-[366px] grid grid-cols-5 items-center`}
+          } nav-dock-glass rounded-full p-1.5 w-full max-w-[366px] grid grid-cols-5 items-center`}
         >
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -286,8 +297,8 @@ export const AppShell: React.FC<AppShellProps> = ({
                 {isActive && (
                   <motion.span
                     layoutId="mobileLiquidPill"
-                    transition={{ type: 'spring', stiffness: 480, damping: 32 }}
-                    className="absolute inset-0.5 rounded-full bg-black/[0.08] dark:bg-white/[0.13] border border-black/[0.05] dark:border-white/[0.12] shadow-sm"
+                    transition={{ type: 'spring', stiffness: 520, damping: 34 }}
+                    className="absolute inset-0.5 rounded-full bg-black/[0.10] dark:bg-white/[0.18] border border-black/[0.06] dark:border-white/[0.16] shadow-sm"
                   />
                 )}
                 <Icon

@@ -69,6 +69,7 @@ interface RawHealthConnectSyncResponse {
   syncedAt: string;
   daysSynced?: number;
   grantedCount: number;
+  recordCounts?: Record<string, number>;
   hrvObservations: {
     id: string;
     date: string;
@@ -148,6 +149,11 @@ interface RawHealthConnectSyncResponse {
     bloodGlucoseMgDl?: number;
     bmrKcal?: number;
     mindfulnessMinutes?: number;
+    avgHrBpm?: number;
+    minHrBpm?: number;
+    maxHrBpm?: number;
+    latestHrBpm?: number;
+    hrSampleCount?: number;
   }[];
   bodyMeasurements: {
     id: string;
@@ -187,6 +193,7 @@ export interface HealthConnectMappedBatch {
   syncedAt: string;
   daysSynced: number;
   grantedCount: number;
+  recordCounts?: Record<string, number>;
   hrvObservations: HRVObservation[];
   rhrObservations: RestingHeartRateObservation[];
   sleepSessions: SleepSession[];
@@ -783,6 +790,11 @@ function mapRawHealthConnectSnapshot(
     bloodGlucoseMgDl: a.bloodGlucoseMgDl,
     bmrKcal: a.bmrKcal,
     mindfulnessMinutes: a.mindfulnessMinutes,
+    avgHrBpm: a.avgHrBpm,
+    minHrBpm: a.minHrBpm,
+    maxHrBpm: a.maxHrBpm,
+    latestHrBpm: a.latestHrBpm,
+    hrSampleCount: a.hrSampleCount,
   }));
 
   const bodyMeasurements: BodyMeasurement[] = (raw.bodyMeasurements ?? []).map((b) => ({
@@ -842,6 +854,7 @@ function mapRawHealthConnectSnapshot(
     syncedAt: raw.syncedAt,
     daysSynced: raw.daysSynced ?? 30,
     grantedCount: raw.grantedCount ?? 0,
+    recordCounts: raw.recordCounts,
     hrvObservations,
     rhrObservations,
     sleepSessions,
