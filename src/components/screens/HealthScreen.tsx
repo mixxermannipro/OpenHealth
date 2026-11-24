@@ -387,7 +387,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
 
       {/* Apple Segmented Sub-tabs */}
       <div
-        className="inline-flex flex-wrap items-center gap-0.5 p-1 rounded-full bg-[var(--bg-well)]"
+        className="grid grid-cols-3 sm:inline-grid sm:grid-cols-3 gap-1 p-1 rounded-2xl bg-[var(--bg-well)]"
         role="tablist"
         aria-label="Körperbereiche"
       >
@@ -406,7 +406,7 @@ export const HealthScreen: React.FC<HealthScreenProps> = ({ snapshot, onExplain 
               role="tab"
               aria-selected={active}
               onClick={() => setHealthSubTab(tab.id)}
-              className={`min-h-[36px] px-4 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
+              className={`min-h-[36px] px-2.5 sm:px-4 py-1.5 rounded-xl text-[11.5px] sm:text-xs font-medium whitespace-nowrap truncate transition-all ${
                 active
                   ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
                   : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
